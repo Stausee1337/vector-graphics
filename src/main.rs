@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, num::NonZeroU32, rc::Rc};
+use std::{cmp::Ordering, num::NonZeroU32, ops::{Add, Mul, Sub}, rc::Rc};
 
 use winit::{event::{ElementState, MouseButton, WindowEvent}, event_loop::EventLoop, window::Window};
 
@@ -13,18 +13,54 @@ struct Canvas<'a> {
 
 #[derive(Clone, Copy)]
 struct Vec2 {
-    x: usize,
-    y: usize,
+    x: f32,
+    y: f32,
 }
 
 impl Vec2 {
-    fn new(x: usize, y: usize) -> Vec2 {
+    fn new(x: f32, y: f32) -> Vec2 {
         Vec2 { x, y }
+    }
+
+    fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y
+    }
+
+    fn length(self) -> f32 {
+        self.dot(self).sqrt()
+    }
+
+    fn lerp(self, other: Self, t: f32) -> Self { 
+        self + (other - self)*t.clamp(0.0, 1.0)
     }
 }
 
-fn intersects_circle(point: &Vec2, center: &Vec2, radius: usize) -> bool {
-    return center.x.abs_diff(point.x) <= radius && center.y.abs_diff(point.y) <= radius;
+impl Mul<f32> for Vec2 {
+    type Output = Vec2;
+
+    fn mul(self, lambda: f32) -> Vec2 {
+        Vec2 { x: self.x * lambda, y: self.y * lambda }
+    }
+}
+
+impl Sub for Vec2 {
+    type Output = Vec2;
+
+    fn sub(self, rhs: Vec2) -> Vec2 {
+        Vec2 { x: self.x - rhs.x, y: self.y - rhs.y }
+    }
+}
+
+impl Add for Vec2 {
+    type Output = Vec2;
+
+    fn add(self, rhs: Vec2) -> Vec2 {
+        Vec2 { x: self.x + rhs.x, y: self.y + rhs.y }
+    }
+}
+
+fn intersects_circle(point: &Vec2, center: &Vec2, radius: f32) -> bool {
+    return (center.x - point.x).abs() <= radius && (center.y - point.y).abs() <= radius;
 }
 
 fn main() {
@@ -32,10 +68,10 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let context = softbuffer::Context::new(event_loop.owned_display_handle()).unwrap();
 
-    let mut mouse_position = Vec2::new(0, 0);
+    let mut mouse_position = Vec2::new(0.0, 0.0);
 
     let mut points: Vec<Vec2> = vec![];
-    let mut control_points = [Vec2::new(100, 100), Vec2::new(300, 50), Vec2::new(500, 100)];
+    let mut control_points = [Vec2::new(100.0, 100.0), Vec2::new(300.0, 50.0), Vec2::new(500.0, 100.0)];
 
     let mut active_element: Option<usize> = None;
 
@@ -89,28 +125,29 @@ fn main() {
                 // x.next();
                 
                 points.clear();
-                flatten_quadratic(&control_points, &mut points);
+                let quadratic = Qudaratic::new(control_points[0], control_points[1], control_points[2]);
+                flatten_quadratic(&quadratic, &mut points);
                 if points.len() > 2 {
                     polygon(&mut canvas, &points, 0xffffffff);
                 }
 
-                const MAX_POINTS: usize = 30;
-                let mut prev = control_points[0];
-                for i in 0..MAX_POINTS {
-                    let t = (i + 1) as f32/MAX_POINTS as f32;
-                    let p = eval_quadratic(&control_points, t);
-                    line(&mut canvas, &prev, &p, 0xff00ff00);
-                    prev = p;
-                }
+                // const MAX_POINTS: usize = 30;
+                // let mut prev = control_points[0];
+                // for i in 0..MAX_POINTS {
+                //     let t = (i + 1) as f32/MAX_POINTS as f32;
+                //     let p = quadratic.evaluate(t);
+                //     line(&mut canvas, &prev, &p, 0xff00ff00);
+                //     prev = p;
+                // }
 
                 for point in control_points.iter() {
-                    circle(&mut canvas, point, 10, 0xffff0000);
+                    circle(&mut canvas, point, 10.0, 0xffff0000);
                 }
 
                 buffer.present().unwrap();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                mouse_position = Vec2::new(position.x as usize, position.y as usize);
+                mouse_position = Vec2::new(position.x as f32, position.y as f32);
 
                 let point = match active_element {
                     Some(idx) => &mut control_points[idx],
@@ -128,7 +165,7 @@ fn main() {
                 match state {
                     ElementState::Pressed => {
                         for (idx, point) in control_points.iter().enumerate() {
-                            if intersects_circle(&mouse_position, point, 10) {
+                            if intersects_circle(&mouse_position, point, 10.0) {
                                 active_element = Some(idx);
                                 return;
                             }
@@ -148,66 +185,104 @@ fn main() {
     event_loop.run_app(&mut app).unwrap();
 }
 
-fn eval_quadratic(control: &[Vec2; 3], t: f32) -> Vec2 {
-    fn evaluate_inner(p0: f32, p1: f32, p2: f32, t: f32) -> f32 {
-        let s = 1.0 - t;
-        s*s*p0 + 2.0*s*t*p1 + t*t*p2
-    }
-
-    let x = evaluate_inner(control[0].x as f32, control[1].x as f32, control[2].x as f32, t);
-    let y = evaluate_inner(control[0].y as f32, control[1].y as f32, control[2].y as f32, t);
-
-    Vec2::new(x as usize, y as usize)
+struct Qudaratic {
+    p0: Vec2,
+    p1: Vec2,
+    p2: Vec2,
 }
 
-fn flatten_quadratic(control: &[Vec2; 3], points: &mut Vec<Vec2>) {
-    points.extend_from_slice(control);
+impl Qudaratic {
+    fn new(p0: Vec2, p1: Vec2, p2: Vec2) -> Self {
+        Qudaratic { p0, p1, p2 }
+    }
+
+    fn error(&self) -> f32 {
+        let control = self.p1 - self.p0;
+        let chord  = self.p2 - self.p0;
+
+        let lambda = (control.dot(chord)/chord.dot(chord)).clamp(0.0, 1.0);
+        let control_flat = chord * lambda;
+
+        0.5 * (control - control_flat).length()
+    }
+
+    fn split(&self) -> (Qudaratic, Qudaratic) {
+        let split_point = self.evaluate(0.5);
+        let control1 = self.p0.lerp(self.p1, 0.5);
+        let control2 = self.p1.lerp(self.p2, 0.5);
+        (Qudaratic::new(self.p0, control1, split_point), Qudaratic::new(split_point, control2, self.p2))
+    }
+
+    fn evaluate(&self, mut t: f32) -> Vec2 {
+        t = t.clamp(0.0, 1.0);
+        let s = 1.0 - t;
+        self.p0*s*s + self.p1*2.0*s*t + self.p2*t*t
+    }
+}
+
+fn flatten_quadratic(quadratic: &Qudaratic, points: &mut Vec<Vec2>) {
+    if quadratic.error() <= 0.25 {
+        points.push(quadratic.p0);
+        points.push(quadratic.p1);
+        points.push(quadratic.p2);
+        return;
+    }
+
+    let (q0, q1) = quadratic.split();
+    flatten_quadratic(&q0, points);
+    flatten_quadratic(&q1, points);
 }
 
 fn clear(canvas: &mut Canvas) {
     canvas.pixels.fill(0);
 }
 
-fn circle(canvas: &mut Canvas, center: &Vec2, radius: usize, color: u32) {
-    let y0 = center.y - radius;
-    let x0 = center.x - radius;
+fn circle(canvas: &mut Canvas, center: &Vec2, radius: f32, color: u32) {
+    let y0 = (center.y - radius) as i32;
+    let x0 = (center.x - radius) as i32;
 
-    let diameter = 2 * radius;
+    let diameter = (2.0 * radius).ceil() as i32;
     let radius2 = radius * radius;
 
     let Canvas { ref mut pixels, width, height, stride } = *canvas;
+    let width = width as i32;
+    let height = height as i32;
 
-    for dy in 0..diameter {
-        for dx in 0..diameter {
-            let oy = dy.abs_diff(radius);
-            let ox = dx.abs_diff(radius);
+    for iy in 0..diameter {
+        let fy = iy as f32;
+
+        for ix in 0..diameter {
+            let fx = ix as f32;
+
+            let oy = (fy - radius).abs();
+            let ox = (fx - radius).abs();
             if ox*ox + oy*oy >= radius2 {
                 continue;
             }
-            let y = y0 + dy;
-            let x = x0 + dx;
-            if y >= height || x >= width {
+            let y = y0 + iy;
+            let x = x0 + ix;
+            if y < 0 || x < 0 || y >= height || x >= width {
                 continue;
             }
-            pixels[y * stride + x] = color;
+            pixels[y as usize * stride + x as usize] = color;
         }
     }
 }
 
 fn line(canvas: &mut Canvas, start: &Vec2, end: &Vec2, color: u32) {
-    let dx = end.x.abs_diff(start.x);
-    let dy = end.y.abs_diff(start.y);
+    let dx = (end.x - start.x).abs() as usize;
+    let dy = (end.y - start.y).abs() as usize;
 
     if dx == 0 && dy == 0 {
-        canvas.pixels[start.y * canvas.stride + start.x] = color;
+        canvas.pixels[start.y as usize * canvas.stride + start.x as usize] = color;
     } else if dx >= dy {
-        generic_line(canvas, start.x, end.x, start.y, end.y, |canvas, x, y| {
+        generic_line(canvas, start.x as usize, end.x as usize, start.y as usize, end.y as usize, |canvas, x, y| {
             if x < canvas.width && y < canvas.height {
                 canvas.pixels[y * canvas.stride + x] = color;
             }
         });
     } else {
-        generic_line(canvas, start.y, end.y, start.x, end.x, |canvas, y, x| {
+        generic_line(canvas, start.y as usize, end.y as usize, start.x as usize, end.x as usize, |canvas, y, x| {
             if x < canvas.width && y < canvas.height {
                 canvas.pixels[y * canvas.stride + x] = color;
             }
@@ -263,12 +338,12 @@ fn polygon(canvas: &mut Canvas, points: &[Vec2], color: u32) {
 
     fn make_edge(start: &Vec2, end: &Vec2) -> Edge {
         let (y_min, y_max, x_hit) = if start.y < end.y {
-            (start.y, end.y, start.x as f32)
+            (start.y as usize, end.y as usize, start.x)
         } else {
-            (end.y, start.y, end.x as f32)
+            (end.y as usize, start.y as usize, end.x)
         };
 
-        let m_inv = (end.x as f32 - start.x as f32)/(end.y as f32 - start.y as f32);
+        let m_inv = (end.x - start.x)/(end.y - start.y);
 
         Edge { y_min, y_max, x_hit, m_inv }
     }
