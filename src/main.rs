@@ -11,20 +11,20 @@ struct Canvas<'a> {
     stride: usize
 }
 
-struct Point {
+#[derive(Clone, Copy)]
+struct Vec2 {
     x: usize,
     y: usize,
 }
 
-impl Point {
-    fn new(x: usize, y: usize) -> Point {
-        Point { x, y }
+impl Vec2 {
+    fn new(x: usize, y: usize) -> Vec2 {
+        Vec2 { x, y }
     }
+}
 
-    fn hit_test(&self, x: usize, y: usize) -> bool {
-        const RADIUS: usize = 10;
-        return self.x.abs_diff(x) <= RADIUS && self.y.abs_diff(y) <= RADIUS;
-    }
+fn intersects_circle(point: &Vec2, center: &Vec2, radius: usize) -> bool {
+    return center.x.abs_diff(point.x) <= radius && center.y.abs_diff(point.y) <= radius;
 }
 
 fn main() {
@@ -32,10 +32,9 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let context = softbuffer::Context::new(event_loop.owned_display_handle()).unwrap();
 
-    let mut mouse_x = 0;
-    let mut mouse_y = 0;
+    let mut mouse_position = Vec2::new(0, 0);
 
-    let mut points: Vec<Point> = vec![];
+    let mut points: Vec<Vec2> = vec![];
 
     let mut active_element: Option<usize> = None;
 
@@ -81,33 +80,31 @@ fn main() {
                     polygon(&mut canvas, &points, 0xffffffff);
                     let start = points.first().unwrap();
                     let end = points.last().unwrap();
-                    line(&mut canvas, start.x, start.y, end.x, end.y, 0xff00ff00);
+                    line(&mut canvas, start, end, 0xff00ff00);
                 }
 
                 let mut x = points.iter();
                 x.next();
 
                 for (start, end) in points.iter().zip(x) {
-                    line(&mut canvas, start.x, start.y, end.x, end.y, 0xff00ff00);
+                    line(&mut canvas, start, end, 0xff00ff00);
                 }
 
                 for point in points.iter() {
-                    circle(&mut canvas, point.x, point.y, 10, 0xffff0000);
+                    circle(&mut canvas, point, 10, 0xffff0000);
                 }
 
                 buffer.present().unwrap();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                mouse_x = position.x as usize;
-                mouse_y = position.y as usize;
+                mouse_position = Vec2::new(position.x as usize, position.y as usize);
 
-                let element = match active_element {
+                let point = match active_element {
                     Some(idx) => &mut points[idx],
                     None => return,
                 };
 
-                element.x = mouse_x;
-                element.y = mouse_y;
+                *point = mouse_position;
 
                 window.request_redraw();
             }
@@ -117,21 +114,18 @@ fn main() {
                 }
                 match state {
                     ElementState::Pressed => {
-                        for (idx, element) in points.iter().enumerate() {
-                            if element.hit_test(mouse_x, mouse_y) {
+                        for (idx, point) in points.iter().enumerate() {
+                            if intersects_circle(&mouse_position, point, 10) {
                                 active_element = Some(idx);
                                 return;
                             }
                         }
                         active_element = Some(points.len());
-                        points.push(Point::new(mouse_x, mouse_y));
+                        points.push(mouse_position);
                         window.request_redraw();
                     },
                     ElementState::Released => active_element = None,
                 }
-            }
-            WindowEvent::MouseWheel { delta, ..  } => {
-
             }
             WindowEvent::CloseRequested => {
                 elwt.exit();
@@ -147,9 +141,9 @@ fn clear(canvas: &mut Canvas) {
     canvas.pixels.fill(0);
 }
 
-fn circle(canvas: &mut Canvas, cx: usize, cy: usize, radius: usize, color: u32) {
-    let y0 = cy - radius;
-    let x0 = cx - radius;
+fn circle(canvas: &mut Canvas, center: &Vec2, radius: usize, color: u32) {
+    let y0 = center.y - radius;
+    let x0 = center.x - radius;
 
     let diameter = 2 * radius;
     let radius2 = radius * radius;
@@ -173,20 +167,20 @@ fn circle(canvas: &mut Canvas, cx: usize, cy: usize, radius: usize, color: u32) 
     }
 }
 
-fn line(canvas: &mut Canvas, sx: usize, sy: usize, ex: usize, ey: usize, color: u32) {
-    let dx = ex.abs_diff(sx);
-    let dy = ey.abs_diff(sy);
+fn line(canvas: &mut Canvas, start: &Vec2, end: &Vec2, color: u32) {
+    let dx = end.x.abs_diff(start.x);
+    let dy = end.y.abs_diff(start.y);
 
     if dx == 0 && dy == 0 {
-        canvas.pixels[sy * canvas.stride + sx] = color;
+        canvas.pixels[start.y * canvas.stride + start.x] = color;
     } else if dx >= dy {
-        generic_line(canvas, sx, ex, sy, ey, |canvas, x, y| {
+        generic_line(canvas, start.x, end.x, start.y, end.y, |canvas, x, y| {
             if x < canvas.width && y < canvas.height {
                 canvas.pixels[y * canvas.stride + x] = color;
             }
         });
     } else {
-        generic_line(canvas, sy, ey, sx, ex, |canvas, y, x| {
+        generic_line(canvas, start.y, end.y, start.x, end.x, |canvas, y, x| {
             if x < canvas.width && y < canvas.height {
                 canvas.pixels[y * canvas.stride + x] = color;
             }
@@ -234,13 +228,13 @@ struct Edge {
     m_inv: f32
 }
 
-fn polygon(canvas: &mut Canvas, points: &[Point], color: u32) {
+fn polygon(canvas: &mut Canvas, points: &[Vec2], color: u32) {
     assert!(points.len() > 2);
 
     let mut x = points.iter();
     x.next();
 
-    fn make_edge(start: &Point, end: &Point) -> Edge {
+    fn make_edge(start: &Vec2, end: &Vec2) -> Edge {
         let (y_min, y_max, x_hit) = if start.y < end.y {
             (start.y, end.y, start.x as f32)
         } else {
