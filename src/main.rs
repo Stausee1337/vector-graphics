@@ -1,23 +1,59 @@
 use std::{num::NonZeroU32, rc::Rc};
 
+use skrifa::{MetadataProvider, instance::Location, outline::{DrawSettings, OutlinePen}, prelude::Size};
 use winit::{event::{ElementState, MouseButton, WindowEvent}, event_loop::EventLoop, window::Window};
-use draw::{primitives, Canvas, Qudaratic, Vec2};
+use draw::{primitives, draw_path, Canvas, Path, PathElement, Quadratic, Vec2};
 
 mod app;
 mod draw;
 
-// const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
+const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
 
 
 fn intersects_circle(point: &Vec2, center: &Vec2, radius: f32) -> bool {
     return (center.x - point.x).abs() <= radius && (center.y - point.y).abs() <= radius;
 }
 
+pub struct SkrifaOutlinePen<'a> {
+    path: &'a mut Path
+}
+
+impl<'a> SkrifaOutlinePen<'a> {
+    fn new(path: &'a mut Path) -> Self {
+        SkrifaOutlinePen { path }
+    }
+}
+
+impl<'a> OutlinePen for SkrifaOutlinePen<'a> {
+    fn move_to(&mut self, x: f32, y: f32) {
+        self.path.push(PathElement::MoveTo(Vec2::new(x, -y)));
+    }
+
+    fn line_to(&mut self, x: f32, y: f32) {
+        self.path.push(PathElement::LineTo(Vec2::new(x, -y)));
+    }
+
+    fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
+        self.path.push(PathElement::QuadTo(Vec2::new(cx0, -cy0), Vec2::new(x, -y))); 
+    }
+
+    fn curve_to(&mut self, _cx0: f32, _cy0: f32, _cx1: f32, _cy1: f32, _x: f32, _y: f32) {
+        todo!()
+    }
+
+    fn close(&mut self) {
+        self.path.push(PathElement::Close); 
+    }
+}
+
 fn main() {
-    // let font = skrifa::FontRef::new(JBM_REGULAR).unwrap();
-    // let glyph_id = font.charmap().map(0x42u32).unwrap();
-    // let outline_glyph = font.outline_glyphs().get(glyph_id).unwrap();
-    // outline_glyph.draw(settings, pen);
+    let font = skrifa::FontRef::new(JBM_REGULAR).unwrap();
+    let glyph_id = font.charmap().map(0x62u32).unwrap();
+    let outline_glyph = font.outline_glyphs().get(glyph_id).unwrap();
+
+    let mut path = Path::new();
+    let mut outline_pen = SkrifaOutlinePen::new(&mut path);
+    outline_glyph.draw(DrawSettings::unhinted(Size::unscaled(), &Location::default()), &mut outline_pen).unwrap();
     
     let event_loop = EventLoop::new().unwrap();
     let context = softbuffer::Context::new(event_loop.owned_display_handle()).unwrap();
@@ -64,6 +100,8 @@ fn main() {
                 let mut canvas = Canvas::from_raw_pixels(&mut buffer, width, height, width);
                 canvas.clear();
 
+                draw_path(&mut canvas, &path, Vec2::new(50.0, 850.0), 0xffffffff);
+
 
                 // if points.len() > 2 {
                 //     polygon(&mut canvas, &points, 0xffffffff);
@@ -76,10 +114,10 @@ fn main() {
                 // x.next();
                 
                 points.clear();
-                let quadratic = Qudaratic::new(control_points[0], control_points[1], control_points[2]);
-                quadratic.flatten(&mut points);
+                let quadratic = Quadratic::new(control_points[0], control_points[1], control_points[2]);
+                quadratic.flatten(&mut points, Vec2::new(0.0, 0.0));
                 if points.len() > 2 {
-                    primitives::polygon(&mut canvas, &points, 0xffffffff);
+                    primitives::polygon(&mut canvas, &points, &[(0, points.len() - 1)], 0xffffffff);
                 }
 
                 primitives::line(&mut canvas, control_points[0], control_points[1], 0xff00ff00);

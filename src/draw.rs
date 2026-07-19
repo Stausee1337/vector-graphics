@@ -90,16 +90,15 @@ impl Add for Vec2 {
     }
 }
 
-pub struct Qudaratic {
+pub struct Quadratic {
     p0: Vec2,
     p1: Vec2,
     p2: Vec2,
 }
 
-impl Qudaratic {
-
+impl Quadratic {
     pub fn new(p0: Vec2, p1: Vec2, p2: Vec2) -> Self {
-        Qudaratic { p0, p1, p2 }
+        Quadratic { p0, p1, p2 }
     }
 
     pub fn error(&self) -> f32 {
@@ -112,11 +111,11 @@ impl Qudaratic {
         0.5 * (control - control_flat).length()
     }
 
-    pub fn split(&self) -> (Qudaratic, Qudaratic) {
+    pub fn split(&self) -> (Quadratic, Quadratic) {
         let split_point = self.evaluate(0.5);
         let control1 = self.p0.lerp(self.p1, 0.5);
         let control2 = self.p1.lerp(self.p2, 0.5);
-        (Qudaratic::new(self.p0, control1, split_point), Qudaratic::new(split_point, control2, self.p2))
+        (Quadratic::new(self.p0, control1, split_point), Quadratic::new(split_point, control2, self.p2))
     }
 
     pub fn evaluate(&self, mut t: f32) -> Vec2 {
@@ -126,18 +125,94 @@ impl Qudaratic {
     }
 
 
-    pub fn flatten(&self, points: &mut Vec<Vec2>) {
+    pub fn flatten(&self, points: &mut Vec<Vec2>, offset: Vec2) {
         if self.error() <= 0.25 {
-            points.push(self.p0);
-            points.push(self.p1);
-            points.push(self.p2);
+            points.push(self.p0 + offset);
+            points.push(self.p1 + offset);
+            points.push(self.p2 + offset);
             return;
         }
 
         let (q0, q1) = self.split();
-        q0.flatten(points);
-        q1.flatten(points);
+        q0.flatten(points, offset);
+        q1.flatten(points, offset);
     }
+}
+
+#[derive(Default)]
+pub struct Path {
+    elements: Vec<PathElement>
+}
+
+impl Path {
+    pub fn new() -> Path {
+        Path::default()
+    }
+
+    pub fn push(&mut self, element: PathElement) {
+        if !matches!(element, PathElement::MoveTo(..)) && self.elements.is_empty() {
+            panic!("push of non-MoveTo element into empty path");
+        }
+        self.elements.push(element);
+    }
+
+    pub fn subpaths(&self) -> impl Iterator<Item = &[PathElement]> {
+        let mut i = 0;
+        std::iter::from_fn(move || {
+            if i >= self.elements.len() {
+                return None;
+            }
+            
+            let start = i;
+            i += 1;
+            while i < self.elements.len() && !matches!(self.elements[i], PathElement::MoveTo(..)) {
+                i += 1;
+            }
+            Some(&self.elements[start..i])
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum PathElement {
+    MoveTo(Vec2),
+    LineTo(Vec2),
+    QuadTo(Vec2, Vec2),
+    Close
+}
+
+pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: u32) {
+    let mut points = vec![];
+    let mut runs = vec![];
+
+    for subpath in path.subpaths() {
+        if subpath.len() < 2 { continue; }
+
+        let PathElement::MoveTo(mut current_position) = subpath[0] else { unreachable!() };
+
+        let start = points.len();
+        for element in subpath {
+            match element {
+                &PathElement::LineTo(endpoint) => {
+                    points.push(current_position + offset);
+                    points.push(endpoint + offset);
+                    current_position = endpoint;
+                },
+                &PathElement::QuadTo(control_point, endpoint) => {
+                    let quadratic = Quadratic::new(current_position, control_point, endpoint);
+                    quadratic.flatten(&mut points, offset);
+                    current_position = endpoint;
+                },
+                PathElement::Close => {
+                    runs.push((start, points.len() - 1));
+                    break;
+                },
+                _ => ()
+            }
+        }
+    }
+
+    primitives::polygon(canvas, &points, &runs, color);
 }
 
 pub mod primitives {
@@ -239,13 +314,11 @@ pub mod primitives {
         m_inv: f32
     }
 
-    pub fn polygon(canvas: &mut Canvas, points: &[Vec2], color: u32) {
+    pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: u32) {
         assert!(points.len() > 2);
 
-        let mut x = points.iter();
-        x.next();
 
-        fn make_edge(start: &Vec2, end: &Vec2) -> Edge {
+        fn make_edge(start: Vec2, end: Vec2) -> Edge {
             let (y_min, y_max, x_hit) = if start.y < end.y {
                 (start.y as i32, end.y as i32, start.x)
             } else {
@@ -257,11 +330,17 @@ pub mod primitives {
             Edge { y_min, y_max, x_hit, m_inv }
         }
 
-        let mut edges = Vec::<Edge>::with_capacity(points.len() + 1);
-        for (start, end) in points.iter().zip(x) {
-            edges.push(make_edge(start, end));
+        let mut edges = Vec::<Edge>::new();
+
+        for &(start, end) in runs {
+            let mut i = start;
+            while i < end {
+                edges.push(make_edge(points[i], points[i + 1]));
+                i += 1;
+            }
+
+            edges.push(make_edge(points[end], points[start]));
         }
-        edges.push(make_edge(points.first().unwrap(), points.last().unwrap()));
 
         edges.sort_by(|a, b| match b.y_min.cmp(&a.y_min) {
             Ordering::Equal => b.x_hit.partial_cmp(&a.x_hit).unwrap_or(Ordering::Equal),
