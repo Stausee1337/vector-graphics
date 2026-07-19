@@ -1,0 +1,14 @@
+[package]
+name = "vector-graphics"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+softbuffer = "0.4.8"
+
+
+[dependencies.winit]
+version = "0.30.13"
+default-features = false
+features = ["ahash", "bytemuck", "memmap2", "percent-encoding", "rwh_06", "x11", "x11-dl", "x11rb"]
+
