@@ -35,6 +35,7 @@ fn main() {
     let mut mouse_position = Vec2::new(0, 0);
 
     let mut points: Vec<Vec2> = vec![];
+    let mut control_points = [Vec2::new(100, 100), Vec2::new(300, 50), Vec2::new(500, 100)];
 
     let mut active_element: Option<usize> = None;
 
@@ -45,8 +46,9 @@ fn main() {
         },
         |_elwt, window| softbuffer::Surface::new(&context, window.clone()).unwrap(),
     )
+    
     .with_event_handler(|window, surface, window_id, event, elwt| {
-        // elwt.set_control_flow(ControlFlow::Wait);
+        // elwt.set_control_flow(ControlFlow::Poll);
 
         if window_id != window.id() {
             return;
@@ -76,21 +78,32 @@ fn main() {
 
                 clear(&mut canvas);
 
+                // if points.len() > 2 {
+                //     polygon(&mut canvas, &points, 0xffffffff);
+                //     let start = points.first().unwrap();
+                //     let end = points.last().unwrap();
+                //     line(&mut canvas, start, end, 0xff00ff00);
+                // }
+
+                // let mut x = points.iter();
+                // x.next();
+                
+                points.clear();
+                flatten_quadratic(&control_points, &mut points);
                 if points.len() > 2 {
                     polygon(&mut canvas, &points, 0xffffffff);
-                    let start = points.first().unwrap();
-                    let end = points.last().unwrap();
-                    line(&mut canvas, start, end, 0xff00ff00);
                 }
 
-                let mut x = points.iter();
-                x.next();
-
-                for (start, end) in points.iter().zip(x) {
-                    line(&mut canvas, start, end, 0xff00ff00);
+                const MAX_POINTS: usize = 30;
+                let mut prev = control_points[0];
+                for i in 0..MAX_POINTS {
+                    let t = (i + 1) as f32/MAX_POINTS as f32;
+                    let p = eval_quadratic(&control_points, t);
+                    line(&mut canvas, &prev, &p, 0xff00ff00);
+                    prev = p;
                 }
 
-                for point in points.iter() {
+                for point in control_points.iter() {
                     circle(&mut canvas, point, 10, 0xffff0000);
                 }
 
@@ -100,7 +113,7 @@ fn main() {
                 mouse_position = Vec2::new(position.x as usize, position.y as usize);
 
                 let point = match active_element {
-                    Some(idx) => &mut points[idx],
+                    Some(idx) => &mut control_points[idx],
                     None => return,
                 };
 
@@ -114,14 +127,12 @@ fn main() {
                 }
                 match state {
                     ElementState::Pressed => {
-                        for (idx, point) in points.iter().enumerate() {
+                        for (idx, point) in control_points.iter().enumerate() {
                             if intersects_circle(&mouse_position, point, 10) {
                                 active_element = Some(idx);
                                 return;
                             }
                         }
-                        active_element = Some(points.len());
-                        points.push(mouse_position);
                         window.request_redraw();
                     },
                     ElementState::Released => active_element = None,
@@ -135,6 +146,22 @@ fn main() {
     });
 
     event_loop.run_app(&mut app).unwrap();
+}
+
+fn eval_quadratic(control: &[Vec2; 3], t: f32) -> Vec2 {
+    fn evaluate_inner(p0: f32, p1: f32, p2: f32, t: f32) -> f32 {
+        let s = 1.0 - t;
+        s*s*p0 + 2.0*s*t*p1 + t*t*p2
+    }
+
+    let x = evaluate_inner(control[0].x as f32, control[1].x as f32, control[2].x as f32, t);
+    let y = evaluate_inner(control[0].y as f32, control[1].y as f32, control[2].y as f32, t);
+
+    Vec2::new(x as usize, y as usize)
+}
+
+fn flatten_quadratic(control: &[Vec2; 3], points: &mut Vec<Vec2>) {
+    points.extend_from_slice(control);
 }
 
 fn clear(canvas: &mut Canvas) {
