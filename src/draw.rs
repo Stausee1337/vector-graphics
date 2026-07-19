@@ -2,14 +2,43 @@ use std::ops::{Add, Mul, Sub};
 
 pub struct Canvas<'a> {
     pub pixels: &'a mut [u32],
-    pub width: usize,
-    pub height: usize,
-    pub stride: usize
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32
 }
 
 impl<'a> Canvas<'a> {
+    pub fn from_raw_pixels(pixels: &'a mut [u32], width: usize, height: usize, stride: usize) -> Canvas<'a> {
+        assert!(pixels.len() >= width * height);
+        Canvas { 
+            pixels,
+            width: i32::try_from(width).unwrap() as u32,
+            height: i32::try_from(height).unwrap() as u32,
+            stride: u32::try_from(stride).unwrap()
+        }
+    }
+
     pub fn clear(&mut self) {
-        self.pixels.fill(0);
+        let (_, height, stride) = (self.width as usize, self.height as usize, self.stride as usize);
+        for y in 0..height {
+            let line = &mut self.pixels[y * stride..(y + 1)*stride];
+            line.fill(0);
+        }
+    }
+
+    pub fn width(&self) -> i32 {
+        self.width as i32
+    }
+
+    pub fn height(&self) -> i32 {
+        self.height as i32
+    }
+
+    pub fn at_mut(&mut self, x: i32, y: i32) -> &mut u32 {
+        assert!(x >= 0 && (x as u32) < self.width);
+        assert!(y >= 0);
+        assert!((y as u32) < self.height);
+        &mut self.pixels[y as usize * self.stride as usize + x as usize]
     }
 }
 
@@ -122,9 +151,8 @@ pub mod primitives {
         let diameter = (2.0 * radius).ceil() as i32;
         let radius2 = radius * radius;
 
-        let Canvas { ref mut pixels, width, height, stride } = *canvas;
-        let width = width as i32;
-        let height = height as i32;
+        let width = canvas.width();
+        let height = canvas.height();
 
         for iy in 0..diameter {
             let fy = iy as f32;
@@ -139,30 +167,33 @@ pub mod primitives {
                 }
                 let y = y0 + iy;
                 let x = x0 + ix;
-                if y < 0 || x < 0 || y >= height || x >= width {
-                    continue;
+                if x >= 0 && y >= 0 && x < width && y < height {
+                    *canvas.at_mut(x, y) = color;
                 }
-                pixels[y as usize * stride + x as usize] = color;
             }
         }
     }
 
     pub fn line(canvas: &mut Canvas, start: Vec2, end: Vec2, color: u32) {
-        let dx = (end.x - start.x).abs() as usize;
-        let dy = (end.y - start.y).abs() as usize;
+        let dx = (end.x - start.x).abs();
+        let dy = (end.y - start.y).abs();
 
-        if dx == 0 && dy == 0 {
-            canvas.pixels[start.y as usize * canvas.stride + start.x as usize] = color;
+        if dx == 0.0 && dy == 0.0 {
+            let x = start.x as i32;
+            let y = start.y as i32;
+            if x >= 0 && y >= 0 && x < canvas.width() && y < canvas.height() {
+                *canvas.at_mut(start.x as i32, start.y as i32) = color;
+            }
         } else if dx >= dy {
-            generic_line(canvas, start.x as usize, end.x as usize, start.y as usize, end.y as usize, |canvas, x, y| {
-                if x < canvas.width && y < canvas.height {
-                    canvas.pixels[y * canvas.stride + x] = color;
+            generic_line(canvas, start.x as i32, end.x as i32, start.y as i32, end.y as i32, |canvas, x, y| {
+                if x >= 0 && y >= 0 && x < canvas.width() && y < canvas.height() {
+                    *canvas.at_mut(x, y) = color;
                 }
             });
         } else {
-            generic_line(canvas, start.y as usize, end.y as usize, start.x as usize, end.x as usize, |canvas, y, x| {
-                if x < canvas.width && y < canvas.height {
-                    canvas.pixels[y * canvas.stride + x] = color;
+            generic_line(canvas, start.y as i32, end.y as i32, start.x as i32, end.x as i32, |canvas, y, x| {
+                if x >= 0 && y >= 0 && x < canvas.width() && y < canvas.height() {
+                    *canvas.at_mut(x, y) = color;
                 }
             });
         }
@@ -170,14 +201,14 @@ pub mod primitives {
 
     fn generic_line(
         canvas: &mut Canvas,
-        c0: usize, c1: usize,
-        u0: usize, u1: usize,
-        pixel: impl Fn(&mut Canvas, usize, usize)) {
+        c0: i32, c1: i32,
+        u0: i32, u1: i32,
+        pixel: impl Fn(&mut Canvas, i32, i32)) {
 
         let (c0, c1, u0, u1) = if c1 >= c0 {
-            (c0 as isize, c1 as isize, u0 as isize, u1 as isize) 
+            (c0 as i32, c1 as i32, u0 as i32, u1 as i32) 
         } else {
-            (c1 as isize, c0 as isize, u1 as isize, u0 as isize)
+            (c1 as i32, c0 as i32, u1 as i32, u0 as i32)
         };
         let inc = if u1 < u0 { -1 } else { 1 };
 
@@ -190,7 +221,7 @@ pub mod primitives {
         let mut decision = two_du - dc;
 
         for c in c0..=c1 {
-            pixel(canvas, c as usize, u as usize);
+            pixel(canvas, c, u);
             if decision <= 0 {
                 decision += two_du;
             } else {
@@ -202,8 +233,8 @@ pub mod primitives {
 
     #[derive(Clone, Copy)]
     struct Edge {
-        y_min: usize,
-        y_max: usize,
+        y_min: i32,
+        y_max: i32,
         x_hit: f32,
         m_inv: f32
     }
@@ -216,9 +247,9 @@ pub mod primitives {
 
         fn make_edge(start: &Vec2, end: &Vec2) -> Edge {
             let (y_min, y_max, x_hit) = if start.y < end.y {
-                (start.y as usize, end.y as usize, start.x)
+                (start.y as i32, end.y as i32, start.x)
             } else {
-                (end.y as usize, start.y as usize, end.x)
+                (end.y as i32, start.y as i32, end.x)
             };
 
             let m_inv = (end.x - start.x)/(end.y - start.y);
@@ -237,49 +268,54 @@ pub mod primitives {
             other => other 
         });
 
-        // let x = edges.iter().map(|edge| edge.y_min).collect::<Vec<_>>();
-        // println!("{:?}", x);
-
         let mut active_edges = Vec::<Edge>::with_capacity(edges.len());
+
+        let width = canvas.width();
+        let stride = canvas.stride as usize;
 
         let mut y = edges.last().unwrap().y_min;
         while !edges.is_empty() || !active_edges.is_empty() {
-            if y >= canvas.height {
-                return;
+            if y >= canvas.height() {
+                break;
             }
-            let scanline = &mut canvas.pixels[y * canvas.stride..(y + 1) * canvas.stride];
 
             while let Some(edge) = edges.last() && edge.y_min == y {
                 active_edges.push(edges.pop().unwrap());
             }
             active_edges.retain(|edge| edge.y_max > y); 
 
-            active_edges.sort_by(|a, b| a.x_hit.partial_cmp(&b.x_hit).unwrap());
+            if y >= 0 {
+                active_edges.sort_by(|a, b| a.x_hit.partial_cmp(&b.x_hit).unwrap());
 
+                let scanline = {
+                    let y = y as usize;
+                    &mut canvas.pixels[y * stride..(y + 1) * stride]
+                };
 
-            let mut aet: &[Edge] = &active_edges;
+                let mut aet: &[Edge] = &active_edges;
+                let mut x = aet.first().map(|edge| edge.x_hit as i32).unwrap_or(0);
+                let mut count = 0;
+                while x < width && !aet.is_empty() {
+                    let next_x = aet[0].x_hit as i32;
 
-            let mut x = 0;
-            let mut count = 0;
-            while x < canvas.width && !aet.is_empty() {
-                let next_x = aet[0].x_hit as usize;
-
-                if count % 2 == 1 {
-                    let next_x = next_x.min(canvas.width);
-                    (&mut scanline[x..next_x]).fill(color);
-                }
-
-                x = next_x;
-                let mut advance = 0;
-                for edge in aet {
-                    let x_hit = edge.x_hit as usize;
-                    if x_hit > x {
-                        break;
+                    if count % 2 == 1 {
+                        let x = x.clamp(0, width);
+                        let next_x = next_x.clamp(0, width);
+                        (&mut scanline[x as usize..next_x as usize]).fill(color);
                     }
-                    advance += 1;
+
+                    x = next_x;
+                    let mut advance = 0;
+                    for edge in aet {
+                        let x_hit = edge.x_hit as i32;
+                        if x_hit > x {
+                            break;
+                        }
+                        advance += 1;
+                    }
+                    count += advance;
+                    aet = &aet[advance..];
                 }
-                count += advance;
-                aet = &aet[advance..];
             }
 
             y += 1;
@@ -297,5 +333,4 @@ pub mod primitives {
             }
         }
     }
-
 }

@@ -61,10 +61,7 @@ fn main() {
                 let mut buffer = surface.buffer_mut().unwrap();
                 let width = buffer.width().get() as usize;
                 let height = buffer.height().get() as usize;
-                let mut canvas = Canvas {
-                    pixels: &mut buffer,
-                    width, height, stride: width
-                };
+                let mut canvas = Canvas::from_raw_pixels(&mut buffer, width, height, width);
                 canvas.clear();
 
 
