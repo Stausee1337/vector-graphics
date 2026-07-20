@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, rc::Rc};
 
 use skrifa::{MetadataProvider, instance::Location, outline::{DrawSettings, OutlinePen}, prelude::Size};
 use winit::{event::{ElementState, MouseButton, WindowEvent}, event_loop::EventLoop, window::Window};
-use draw::{primitives, draw_path, Canvas, Path, PathElement, Quadratic, Vec2};
+use draw::{primitives, draw_path, Canvas, Path, PathElement, Cubic, Vec2};
 
 mod app;
 mod draw;
@@ -37,8 +37,8 @@ impl<'a> OutlinePen for SkrifaOutlinePen<'a> {
         self.path.push(PathElement::QuadTo(Vec2::new(cx0, -cy0), Vec2::new(x, -y))); 
     }
 
-    fn curve_to(&mut self, _cx0: f32, _cy0: f32, _cx1: f32, _cy1: f32, _x: f32, _y: f32) {
-        todo!()
+    fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
+        self.path.push(PathElement::CurveTo(Vec2::new(cx0, -cy0), Vec2::new(cx1, -cy1), Vec2::new(x, -y))); 
     }
 
     fn close(&mut self) {
@@ -48,7 +48,7 @@ impl<'a> OutlinePen for SkrifaOutlinePen<'a> {
 
 fn main() {
     let font = skrifa::FontRef::new(JBM_REGULAR).unwrap();
-    let glyph_id = font.charmap().map(0x62u32).unwrap();
+    let glyph_id = font.charmap().map(0x6au32).unwrap();
     let outline_glyph = font.outline_glyphs().get(glyph_id).unwrap();
 
     let mut path = Path::new();
@@ -61,7 +61,7 @@ fn main() {
     let mut mouse_position = Vec2::new(0.0, 0.0);
 
     let mut points: Vec<Vec2> = vec![];
-    let mut control_points = [Vec2::new(100.0, 100.0), Vec2::new(300.0, 50.0), Vec2::new(500.0, 100.0)];
+    let mut control_points = [Vec2::new(100.0, 100.0), Vec2::new(200.0, 50.0), Vec2::new(400.0, 50.0), Vec2::new(500.0, 100.0)];
 
     let mut active_element: Option<usize> = None;
 
@@ -100,7 +100,7 @@ fn main() {
                 let mut canvas = Canvas::from_raw_pixels(&mut buffer, width, height, width);
                 canvas.clear();
 
-                draw_path(&mut canvas, &path, Vec2::new(50.0, 850.0), 0xffffffff);
+                draw_path(&mut canvas, &path, Vec2::new(50.0, 850.0), 0xff00ffff);
 
 
                 // if points.len() > 2 {
@@ -114,14 +114,14 @@ fn main() {
                 // x.next();
                 
                 points.clear();
-                let quadratic = Quadratic::new(control_points[0], control_points[1], control_points[2]);
-                quadratic.flatten(&mut points, Vec2::new(0.0, 0.0));
+                let cubic = Cubic::new(control_points[0], control_points[1], control_points[2], control_points[3]);
+                cubic.flatten(&mut points, Vec2::new(0.0, 0.0));
                 if points.len() > 2 {
                     primitives::polygon(&mut canvas, &points, &[(0, points.len() - 1)], 0xffffffff);
                 }
 
-                primitives::line(&mut canvas, control_points[0], control_points[1], 0xff00ff00);
-                primitives::line(&mut canvas, control_points[1], control_points[2], 0xff00ff00);
+                primitives::line(&mut canvas, cubic.p0, cubic.p1, 0xff00ff00);
+                primitives::line(&mut canvas, cubic.p2, cubic.p3, 0xff00ff00);
 
                 // const MAX_POINTS: usize = 30;
                 // let mut prev = control_points[0];
@@ -132,9 +132,11 @@ fn main() {
                 //     prev = p;
                 // }
 
-                for point in control_points.iter() {
-                    primitives::circle(&mut canvas, *point, 10.0, 0xffff0000);
-                }
+                primitives::circle(&mut canvas, cubic.p0, 7.0, 0xffff0000);
+                primitives::circle(&mut canvas, cubic.p3, 7.0, 0xffff0000);
+
+                primitives::circle(&mut canvas, cubic.p1, 7.0, 0xff00ffff);
+                primitives::circle(&mut canvas, cubic.p2, 7.0, 0xff00ffff);
 
                 buffer.present().unwrap();
             }

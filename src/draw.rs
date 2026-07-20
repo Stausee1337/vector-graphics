@@ -168,8 +168,8 @@ impl Quadratic {
         (Quadratic::new(self.p0, control1, split_point), Quadratic::new(split_point, control2, self.p2))
     }
 
-    pub fn evaluate(&self, mut t: f32) -> Vec2 {
-        t = t.clamp(0.0, 1.0);
+    pub fn evaluate(&self, t: f32) -> Vec2 {
+        let t = t.clamp(0.0, 1.0);
         let s = 1.0 - t;
         self.p0*s*s + self.p1*2.0*s*t + self.p2*t*t
     }
@@ -180,6 +180,67 @@ impl Quadratic {
             points.push(self.p0 + offset);
             points.push(self.p1 + offset);
             points.push(self.p2 + offset);
+            return;
+        }
+
+        let (q0, q1) = self.split();
+        q0.flatten(points, offset);
+        q1.flatten(points, offset);
+    }
+}
+
+pub struct Cubic {
+    pub p0: Vec2,
+    pub p1: Vec2,
+    pub p2: Vec2,
+    pub p3: Vec2,
+}
+
+impl Cubic {
+    pub fn new(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2) -> Cubic {
+        Cubic { p0, p1, p2, p3 }
+    }
+
+    pub fn evaluate(&self, t: f32) -> Vec2 {
+        let t = t.clamp(0.0, 1.0);
+        let t2 = t * t;
+        let u = 1.0 - t;
+        let u2 = u * u;
+        self.p0*u2*u + self.p1*3.0*u2*t + self.p2*3.0*u*t2 + self.p3*t2*t
+    }
+
+    pub fn split(&self) -> (Cubic, Cubic) {
+        let split_point = self.evaluate(0.5);
+        let s = self.p1.lerp(self.p2, 0.5);
+        let q1 = self.p0.lerp(self.p1, 0.5);
+        let q2 = q1.lerp(s, 0.5);
+        let r2 = self.p2.lerp(self.p3, 0.5);
+        let r1 = r2.lerp(s, 0.5);
+
+        (Cubic::new(self.p0, q1, q2, split_point), Cubic::new(split_point, r1, r2, self.p3))
+    }
+
+    pub fn error(&self) -> f32 {
+        let control1 = self.p1 - self.p0;
+        let control2 = self.p2 - self.p0;
+        let chord  = self.p3 - self.p0;
+        let len_squared = chord.dot(chord);
+
+        let get_dist = |control: Vec2| -> f32 {
+            let lambda = (control.dot(chord)/len_squared).clamp(0.0, 1.0);
+            let control_flat = chord * lambda;
+            (control - control_flat).length()
+        };
+
+        0.5 * get_dist(control1).max(get_dist(control2))
+    }
+
+    pub fn flatten(&self, points: &mut Vec<Vec2>, offset: Vec2) {
+        if self.error() <= 0.25 {
+            points.push(self.p0 + offset);
+            points.push(self.p1 + offset);
+            points.push(self.p2 + offset);
+            points.push(self.p3 + offset);
             return;
         }
 
@@ -228,6 +289,7 @@ pub enum PathElement {
     MoveTo(Vec2),
     LineTo(Vec2),
     QuadTo(Vec2, Vec2),
+    CurveTo(Vec2, Vec2, Vec2),
     Close
 }
 
@@ -253,11 +315,16 @@ pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: u32) {
                     quadratic.flatten(&mut points, offset);
                     current_position = endpoint;
                 },
+                &PathElement::CurveTo(control1, control2, endpoint) => {
+                    let quadratic = Cubic::new(current_position, control1, control2, endpoint);
+                    quadratic.flatten(&mut points, offset);
+                    current_position = endpoint;
+                }
                 PathElement::Close => {
                     runs.push((start, points.len() - 1));
                     break;
                 },
-                _ => ()
+                PathElement::MoveTo(..) => (),
             }
         }
     }
@@ -368,6 +435,7 @@ pub mod primitives {
     pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: u32) {
         assert!(points.len() > 2);
         let color = Color(color);
+        // TODO: pixel coverage based anti-aliasing without vertical supersampling
         let vertical_subsamples = 5;
 
         fn make_edge(start: Vec2, end: Vec2, vertical_subsamples: f32) -> Edge {
@@ -422,9 +490,6 @@ pub mod primitives {
                 if y >= canvas.height() * vertical_subsamples {
                     break;
                 }
-                // probably, in order to not anti-alias y-values in the middle of the scanline, we need
-                // to allow for overlap between scanlines and actually handle that correctly, instead
-                // of just trying to avoid the problem from the beginning.
                 let scan_y = y as f32 + 0.5;
 
                 active_edges.retain(|edge| !(edge.y_max <= scan_y));
@@ -439,7 +504,6 @@ pub mod primitives {
 
                 if y >= 0 {
                     active_edges.sort_by(|a, b| a.x_hit.partial_cmp(&b.x_hit).unwrap());
-
                     draw_active_edges(&active_edges, &mut scanline, width, (255 / vertical_subsamples) as u8);
                 }
 
@@ -451,6 +515,9 @@ pub mod primitives {
                     }
                     edge.x_hit += edge.m_inv;
                 }
+            }
+            if y < 0 {
+                continue;
             }
             if y >= canvas.height() * vertical_subsamples {
                 break;
@@ -481,6 +548,7 @@ pub mod primitives {
             let mut x1 = x_hit as i32;
             winding += edge.direction;
 
+            // TODO: support for evenodd fill rule
             if winding == 0 {
                 if x1 >= 0 && x0 < width {
                     if x0 >= 0 {
