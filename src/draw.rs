@@ -90,6 +90,56 @@ impl Add for Vec2 {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, bytemuck::Pod)]
+#[repr(transparent)]
+pub struct Color(pub u32);
+
+unsafe impl bytemuck::Zeroable for Color { }
+
+impl Color {
+    pub fn from_rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Color {
+        Color((alpha as u32) << 0o30 | (red as u32) << 0o20 | (green as u32) << 0o10 | blue as u32)
+    }
+
+    pub fn alpha(self) -> u8 {
+        (self.0 >> 0o30) as u8
+    }
+
+    pub fn red(self) -> u8 {
+        (self.0 >> 0o20) as u8
+    }
+
+    pub fn green(self) -> u8 {
+        (self.0 >> 0o10) as u8
+    }
+
+    pub fn blue(self) -> u8 {
+        (self.0 >> 0o00) as u8
+    }
+
+    pub fn with_alpha(self, alpha: u8) -> Self {
+        Self((self.0 & 0x00FFFFFF) | (alpha as u32) << 0o30)
+    }
+
+    pub fn blend(self, other: Color) -> Color {
+        let a1 = self.alpha();
+        let r1 = self.red()   as u32;
+        let g1 = self.green() as u32;
+        let b1 = self.blue()  as u32;
+
+        let a2 = other.alpha() as u32;
+        let r2 = other.red()   as u32;
+        let g2 = other.green() as u32;
+        let b2 = other.blue()  as u32;
+
+        let r = ((r1*(255 - a2) + r2*a2)/255).min(255) as u8;
+        let g = ((g1*(255 - a2) + g2*a2)/255).min(255) as u8;
+        let b = ((b1*(255 - a2) + b2*a2)/255).min(255) as u8;
+
+        Color::from_rgba(r, g, b, a1)
+    }
+}
+
 pub struct Quadratic {
     p0: Vec2,
     p1: Vec2,
@@ -216,7 +266,7 @@ pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: u32) {
 }
 
 pub mod primitives {
-    use super::{Canvas, Vec2};
+    use super::{Canvas, Vec2, Color};
     use std::{cmp::Ordering};
 
     pub fn circle(canvas: &mut Canvas, center: Vec2, radius: f32, color: u32) {
@@ -308,26 +358,37 @@ pub mod primitives {
 
     #[derive(Clone, Copy)]
     struct Edge {
-        y_min: i32,
-        y_max: i32,
+        y_min: f32,
+        y_max: f32,
         x_hit: f32,
-        m_inv: f32
+        m_inv: f32,
+        direction: i32
     }
 
     pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: u32) {
         assert!(points.len() > 2);
+        let color = Color(color);
+        let vertical_subsamples = 5;
 
+        fn make_edge(start: Vec2, end: Vec2, vertical_subsamples: f32) -> Edge {
+            let (start_x, start_y) = (start.x, start.y * vertical_subsamples);
+            let (end_x, end_y) = (end.x, end.y * vertical_subsamples);
 
-        fn make_edge(start: Vec2, end: Vec2) -> Edge {
-            let (y_min, y_max, x_hit) = if start.y < end.y {
-                (start.y as i32, end.y as i32, start.x)
+            let (y_min, y_max, x_hit, direction) = if start_y < end_y {
+                (start_y as f32, end_y as f32, start_x, 1)
             } else {
-                (end.y as i32, start.y as i32, end.x)
+                (end_y as f32, start_y as f32, end_x, -1)
             };
 
-            let m_inv = (end.x - start.x)/(end.y - start.y);
+            let m_inv = (end_x - start_x)/(end_y - start_y);
 
-            Edge { y_min, y_max, x_hit, m_inv }
+            Edge {
+                y_min,
+                y_max,
+                x_hit,
+                m_inv,
+                direction
+            }
         }
 
         let mut edges = Vec::<Edge>::new();
@@ -335,81 +396,111 @@ pub mod primitives {
         for &(start, end) in runs {
             let mut i = start;
             while i < end {
-                edges.push(make_edge(points[i], points[i + 1]));
+                edges.push(make_edge(points[i], points[i + 1], vertical_subsamples as f32));
                 i += 1;
             }
 
-            edges.push(make_edge(points[end], points[start]));
+            edges.push(make_edge(points[end], points[start], vertical_subsamples as f32));
         }
 
-        edges.sort_by(|a, b| match b.y_min.cmp(&a.y_min) {
-            Ordering::Equal => b.x_hit.partial_cmp(&a.x_hit).unwrap_or(Ordering::Equal),
-            other => other 
+        edges.sort_by(|a, b| match b.y_min.partial_cmp(&a.y_min) {
+            Some(Ordering::Equal) => b.x_hit.partial_cmp(&a.x_hit).unwrap_or(Ordering::Equal),
+            Some(other) => other,
+            None => Ordering::Greater
         });
 
+        let mut scanline = vec![0u8; canvas.width as usize];
         let mut active_edges = Vec::<Edge>::with_capacity(edges.len());
 
         let width = canvas.width();
         let stride = canvas.stride as usize;
 
-        let mut y = edges.last().unwrap().y_min;
+        let mut y = edges.last().unwrap().y_min as i32;
         while !edges.is_empty() || !active_edges.is_empty() {
-            if y >= canvas.height() {
+            scanline.fill(0);
+            for _ in 0..vertical_subsamples {
+                if y >= canvas.height() * vertical_subsamples {
+                    break;
+                }
+                // probably, in order to not anti-alias y-values in the middle of the scanline, we need
+                // to allow for overlap between scanlines and actually handle that correctly, instead
+                // of just trying to avoid the problem from the beginning.
+                let scan_y = y as f32 + 0.5;
+
+                active_edges.retain(|edge| !(edge.y_max <= scan_y));
+
+                while let Some(edge) = edges.last() && edge.y_min <= scan_y {
+                    let mut edge = edges.pop().unwrap();
+                    if edge.y_max > scan_y {
+                        edge.x_hit += edge.m_inv * (scan_y - edge.y_min);
+                        active_edges.push(edge);
+                    }
+                }
+
+                if y >= 0 {
+                    active_edges.sort_by(|a, b| a.x_hit.partial_cmp(&b.x_hit).unwrap());
+
+                    draw_active_edges(&active_edges, &mut scanline, width, (255 / vertical_subsamples) as u8);
+                }
+
+                y += 1;
+
+                for edge in active_edges.iter_mut() {
+                    if edge.m_inv == f32::INFINITY {
+                        continue;
+                    }
+                    edge.x_hit += edge.m_inv;
+                }
+            }
+            if y >= canvas.height() * vertical_subsamples {
                 break;
             }
 
-            while let Some(edge) = edges.last() && edge.y_min == y {
-                active_edges.push(edges.pop().unwrap());
-            }
-            active_edges.retain(|edge| edge.y_max > y); 
+            let y = (y / vertical_subsamples) as usize;
 
-            if y >= 0 {
-                active_edges.sort_by(|a, b| a.x_hit.partial_cmp(&b.x_hit).unwrap());
-
-                let scanline = {
-                    let y = y as usize;
-                    &mut canvas.pixels[y * stride..(y + 1) * stride]
-                };
-
-                let mut aet: &[Edge] = &active_edges;
-                let mut x = aet.first().map(|edge| edge.x_hit as i32).unwrap_or(0);
-                let mut count = 0;
-                while x < width && !aet.is_empty() {
-                    let next_x = aet[0].x_hit as i32;
-
-                    if count % 2 == 1 {
-                        let x = x.clamp(0, width);
-                        let next_x = next_x.clamp(0, width);
-                        (&mut scanline[x as usize..next_x as usize]).fill(color);
-                    }
-
-                    x = next_x;
-                    let mut advance = 0;
-                    for edge in aet {
-                        let x_hit = edge.x_hit as i32;
-                        if x_hit > x {
-                            break;
-                        }
-                        advance += 1;
-                    }
-                    count += advance;
-                    aet = &aet[advance..];
-                }
-            }
-
-            y += 1;
-
-            if y > 10_000 {
-                eprintln!("bailing iteration, {}, {}", edges.len(), active_edges.len());
-                return;
-            }
-
-            for edge in active_edges.iter_mut() {
-                if edge.m_inv == f32::INFINITY {
-                    continue;
-                }
-                edge.x_hit += edge.m_inv;
+            let row: &mut [Color] = bytemuck::cast_slice_mut(&mut canvas.pixels[y * stride..(y + 1) * stride]);
+            for x in 0..scanline.len() {
+                let alpha = ((scanline[x] as u32 * color.alpha() as u32)/255) as u8;
+                row[x] = row[x].blend(color.with_alpha(alpha));
             }
         }
     }
+
+    fn draw_active_edges(aet: &[Edge], scanline: &mut [u8], width: i32, max_weight: u8) {
+        let mut current_x = 0.0;
+        let mut winding = 0;
+
+        for edge in aet {
+            if winding == 0 {
+                current_x = edge.x_hit;
+                winding += edge.direction;
+                continue;
+            }
+            let x_hit = edge.x_hit;
+            let mut x0 = current_x as i32;
+            let mut x1 = x_hit as i32;
+            winding += edge.direction;
+
+            if winding == 0 {
+                if x1 >= 0 && x0 < width {
+                    if x0 >= 0 {
+                        scanline[x0 as usize] = scanline[x0 as usize].saturating_add(((1.0 - current_x.fract()) * max_weight as f32).abs() as u8);
+                    } else {
+                        x0 = -1;
+                    }
+
+                    if x1 < width {
+                        scanline[x1 as usize] = scanline[x1 as usize].saturating_add((x_hit.fract() * max_weight as f32).abs() as u8);
+                    } else {
+                        x1 = width;
+                    }
+
+
+                    for x in (x0+1)..x1 {
+                        scanline[x as usize] = scanline[x as usize].saturating_add(max_weight);
+                    }
+                }
+            }
+        }
+    }    
 }
