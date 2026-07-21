@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, rc::Rc};
 
 use skrifa::{MetadataProvider, instance::Location, outline::{DrawSettings, OutlinePen}, prelude::Size};
 use winit::{event::{ElementState, MouseButton, WindowEvent}, event_loop::EventLoop, window::Window};
-use draw::{primitives, draw_path, Canvas, Path, PathElement, Cubic, Vec2};
+use draw::{colors, primitives, draw_path, Canvas, Path, PathElement, Cubic, Vec2};
 
 mod app;
 mod draw;
@@ -100,7 +100,7 @@ fn main() {
                 let mut canvas = Canvas::from_raw_pixels(&mut buffer, width, height, width);
                 canvas.clear();
 
-                draw_path(&mut canvas, &path, Vec2::new(50.0, 850.0), 0xff00ffff);
+                draw_path(&mut canvas, &path, Vec2::new(50.0, 850.0), colors::AQUA);
 
 
                 // if points.len() > 2 {
@@ -117,11 +117,11 @@ fn main() {
                 let cubic = Cubic::new(control_points[0], control_points[1], control_points[2], control_points[3]);
                 cubic.flatten(&mut points, Vec2::new(0.0, 0.0));
                 if points.len() > 2 {
-                    primitives::polygon(&mut canvas, &points, &[(0, points.len() - 1)], 0xffffffff);
+                    primitives::polygon(&mut canvas, &points, &[(0, points.len() - 1)], colors::WHITE);
                 }
 
-                primitives::line(&mut canvas, cubic.p0, cubic.p1, 0xff00ff00);
-                primitives::line(&mut canvas, cubic.p2, cubic.p3, 0xff00ff00);
+                primitives::line(&mut canvas, cubic.p0, cubic.p1, colors::LIME);
+                primitives::line(&mut canvas, cubic.p2, cubic.p3, colors::LIME);
 
                 // const MAX_POINTS: usize = 30;
                 // let mut prev = control_points[0];
@@ -132,11 +132,11 @@ fn main() {
                 //     prev = p;
                 // }
 
-                primitives::circle(&mut canvas, cubic.p0, 7.0, 0xffff0000);
-                primitives::circle(&mut canvas, cubic.p3, 7.0, 0xffff0000);
+                primitives::circle(&mut canvas, cubic.p0, 7.0, colors::RED);
+                primitives::circle(&mut canvas, cubic.p3, 7.0, colors::RED);
 
-                primitives::circle(&mut canvas, cubic.p1, 7.0, 0xff00ffff);
-                primitives::circle(&mut canvas, cubic.p2, 7.0, 0xff00ffff);
+                primitives::circle(&mut canvas, cubic.p1, 7.0, colors::AQUA);
+                primitives::circle(&mut canvas, cubic.p2, 7.0, colors::AQUA);
 
                 buffer.present().unwrap();
             }

@@ -34,11 +34,16 @@ impl<'a> Canvas<'a> {
         self.height as i32
     }
 
-    pub fn at_mut(&mut self, x: i32, y: i32) -> &mut u32 {
+    pub fn at(&self, x: i32, y: i32) -> &Color {
         assert!(x >= 0 && (x as u32) < self.width);
-        assert!(y >= 0);
-        assert!((y as u32) < self.height);
-        &mut self.pixels[y as usize * self.stride as usize + x as usize]
+        assert!(y >= 0 && (y as u32) < self.height);
+        bytemuck::cast_ref(&self.pixels[y as usize * self.stride as usize + x as usize])
+    }
+
+    pub fn at_mut(&mut self, x: i32, y: i32) -> &mut Color {
+        assert!(x >= 0 && (x as u32) < self.width);
+        assert!(y >= 0 && (y as u32) < self.height);
+        bytemuck::cast_mut(&mut self.pixels[y as usize * self.stride as usize + x as usize])
     }
 }
 
@@ -138,6 +143,15 @@ impl Color {
 
         Color::from_rgba(r, g, b, a1)
     }
+}
+
+pub mod colors {
+    use super::Color;
+
+    pub const WHITE: Color = Color(0xffffffff);
+    pub const RED  : Color = Color(0xffff0000);
+    pub const LIME : Color = Color(0xff00ff00);
+    pub const AQUA : Color = Color(0xff00ffff);
 }
 
 pub struct Quadratic {
@@ -293,7 +307,7 @@ pub enum PathElement {
     Close
 }
 
-pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: u32) {
+pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: Color) {
     let mut points = vec![];
     let mut runs = vec![];
 
@@ -336,7 +350,7 @@ pub mod primitives {
     use super::{Canvas, Vec2, Color};
     use std::{cmp::Ordering};
 
-    pub fn circle(canvas: &mut Canvas, center: Vec2, radius: f32, color: u32) {
+    pub fn circle(canvas: &mut Canvas, center: Vec2, radius: f32, color: Color) {
         let y0 = (center.y - radius) as i32;
         let x0 = (center.x - radius) as i32;
 
@@ -366,7 +380,7 @@ pub mod primitives {
         }
     }
 
-    pub fn line(canvas: &mut Canvas, start: Vec2, end: Vec2, color: u32) {
+    pub fn line(canvas: &mut Canvas, start: Vec2, end: Vec2, color: Color) {
         let dx = (end.x - start.x).abs();
         let dy = (end.y - start.y).abs();
 
@@ -432,9 +446,8 @@ pub mod primitives {
         direction: i32
     }
 
-    pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: u32) {
+    pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: Color) {
         assert!(points.len() > 2);
-        let color = Color(color);
         // TODO: pixel coverage based anti-aliasing without vertical supersampling
         let vertical_subsamples = 5;
 
