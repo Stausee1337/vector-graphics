@@ -1,4 +1,4 @@
-use std::ops::{Add, Mul, Sub};
+use std::ops::{Add, Mul, Neg, Sub};
 
 pub struct Canvas<'a> {
     pub pixels: &'a mut [u32],
@@ -95,34 +95,111 @@ impl Add for Vec2 {
     }
 }
 
+impl Neg for Vec2 {
+    type Output = Vec2;
+
+    fn neg(self) -> Vec2 {
+        Vec2 { x: -self.x, y: -self.y }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Affine([f32; 6]);
+
+impl Affine {
+    pub const IDENTITY: Affine = Affine::scale(1.0);
+
+    pub const fn new(coeffs: [f32; 6]) -> Affine {
+        Affine(coeffs)
+    }
+
+    pub const fn scale(scale: f32) -> Affine {
+        Affine([scale, 0.0, 0.0, scale, 0.0, 0.0])
+    }
+
+    pub const fn translate(translation: Vec2) -> Affine {
+        Affine([1.0, 0.0, 0.0, 1.0, translation.x, translation.y])
+    }
+
+    pub fn rotate(angle: f32) -> Affine {
+        let (s, c) = angle.sin_cos();
+        Affine([c, -s, s, c, 0.0, 0.0])
+    }
+}
+
+impl Mul for Affine {
+    type Output = Affine;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        // |a b e|   |t u x|
+        // |c d f| * |v w y|
+        // |0 0 1|   |0 0 1|
+        // 
+        // |at + bv  au + bw  ax + by + e|
+        // |ct + dv  cu + dw  cx + dy + f|
+        // |   0        0          1     |
+
+        Self::new([
+            self.0[0] * rhs.0[0] + self.0[1] * rhs.0[2],
+            self.0[0] * rhs.0[1] + self.0[1] * rhs.0[3],
+            self.0[2] * rhs.0[0] + self.0[3] * rhs.0[2],
+            self.0[2] * rhs.0[1] + self.0[3] * rhs.0[3],
+            self.0[0] * rhs.0[4] + self.0[1] * rhs.0[5] + self.0[4],
+            self.0[2] * rhs.0[4] + self.0[3] * rhs.0[5] + self.0[5],
+        ])
+    }
+}
+
+impl Mul<Vec2> for Affine {
+    type Output = Vec2;
+
+    fn mul(self, rhs: Vec2) -> Self::Output {
+        // |a b e|   |x|
+        // |c d f| * |y|
+        // |0 0 0|   |1|
+        // 
+        // |ax + by + e|
+        // |cx + dy + f|
+        // |     0     |
+        Vec2 {
+            x: self.0[0] * rhs.x + self.0[1] * rhs.y + self.0[4],
+            y: self.0[2] * rhs.x + self.0[3] * rhs.y + self.0[5],
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, bytemuck::Pod)]
 #[repr(transparent)]
-pub struct Color(pub u32);
+pub struct Color(u32);
 
 unsafe impl bytemuck::Zeroable for Color { }
 
 impl Color {
-    pub fn from_rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Color {
+    pub const fn new(color: u32) -> Color {
+        Color(color)
+    }
+
+    pub const fn from_rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Color {
         Color((alpha as u32) << 0o30 | (red as u32) << 0o20 | (green as u32) << 0o10 | blue as u32)
     }
 
-    pub fn alpha(self) -> u8 {
+    pub const fn alpha(self) -> u8 {
         (self.0 >> 0o30) as u8
     }
 
-    pub fn red(self) -> u8 {
+    pub const fn red(self) -> u8 {
         (self.0 >> 0o20) as u8
     }
 
-    pub fn green(self) -> u8 {
+    pub const fn green(self) -> u8 {
         (self.0 >> 0o10) as u8
     }
 
-    pub fn blue(self) -> u8 {
+    pub const fn blue(self) -> u8 {
         (self.0 >> 0o00) as u8
     }
 
-    pub fn with_alpha(self, alpha: u8) -> Self {
+    pub const fn with_alpha(self, alpha: u8) -> Self {
         Self((self.0 & 0x00FFFFFF) | (alpha as u32) << 0o30)
     }
 
@@ -143,15 +220,19 @@ impl Color {
 
         Color::from_rgba(r, g, b, a1)
     }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
 }
 
 pub mod colors {
     use super::Color;
 
-    pub const WHITE: Color = Color(0xffffffff);
-    pub const RED  : Color = Color(0xffff0000);
-    pub const LIME : Color = Color(0xff00ff00);
-    pub const AQUA : Color = Color(0xff00ffff);
+    pub const WHITE: Color = Color::new(0xffffffff);
+    pub const RED  : Color = Color::new(0xffff0000);
+    pub const LIME : Color = Color::new(0xff00ff00);
+    pub const AQUA : Color = Color::new(0xff00ffff);
 }
 
 pub struct Quadratic {
@@ -189,17 +270,17 @@ impl Quadratic {
     }
 
 
-    pub fn flatten(&self, points: &mut Vec<Vec2>, offset: Vec2) {
+    pub fn flatten(&self, points: &mut Vec<Vec2>, transform: Affine) {
         if self.error() <= 0.25 {
-            points.push(self.p0 + offset);
-            points.push(self.p1 + offset);
-            points.push(self.p2 + offset);
+            points.push(transform * self.p0);
+            points.push(transform * self.p1);
+            points.push(transform * self.p2);
             return;
         }
 
         let (q0, q1) = self.split();
-        q0.flatten(points, offset);
-        q1.flatten(points, offset);
+        q0.flatten(points, transform);
+        q1.flatten(points, transform);
     }
 }
 
@@ -249,18 +330,18 @@ impl Cubic {
         0.5 * get_dist(control1).max(get_dist(control2))
     }
 
-    pub fn flatten(&self, points: &mut Vec<Vec2>, offset: Vec2) {
+    pub fn flatten(&self, points: &mut Vec<Vec2>, transform: Affine) {
         if self.error() <= 0.25 {
-            points.push(self.p0 + offset);
-            points.push(self.p1 + offset);
-            points.push(self.p2 + offset);
-            points.push(self.p3 + offset);
+            points.push(transform * self.p0);
+            points.push(transform * self.p1);
+            points.push(transform * self.p2);
+            points.push(transform * self.p3);
             return;
         }
 
         let (q0, q1) = self.split();
-        q0.flatten(points, offset);
-        q1.flatten(points, offset);
+        q0.flatten(points, transform);
+        q1.flatten(points, transform);
     }
 }
 
@@ -272,6 +353,10 @@ pub struct Path {
 impl Path {
     pub fn new() -> Path {
         Path::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.elements.clear();
     }
 
     pub fn push(&mut self, element: PathElement) {
@@ -307,7 +392,7 @@ pub enum PathElement {
     Close
 }
 
-pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: Color) {
+pub fn draw_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Color) {
     let mut points = vec![];
     let mut runs = vec![];
 
@@ -320,18 +405,18 @@ pub fn draw_path(canvas: &mut Canvas, path: &Path, offset: Vec2, color: Color) {
         for element in subpath {
             match element {
                 &PathElement::LineTo(endpoint) => {
-                    points.push(current_position + offset);
-                    points.push(endpoint + offset);
+                    points.push(transform * current_position);
+                    points.push(transform * endpoint);
                     current_position = endpoint;
                 },
                 &PathElement::QuadTo(control_point, endpoint) => {
                     let quadratic = Quadratic::new(current_position, control_point, endpoint);
-                    quadratic.flatten(&mut points, offset);
+                    quadratic.flatten(&mut points, transform);
                     current_position = endpoint;
                 },
                 &PathElement::CurveTo(control1, control2, endpoint) => {
-                    let quadratic = Cubic::new(current_position, control1, control2, endpoint);
-                    quadratic.flatten(&mut points, offset);
+                    let cubic = Cubic::new(current_position, control1, control2, endpoint);
+                    cubic.flatten(&mut points, transform);
                     current_position = endpoint;
                 }
                 PathElement::Close => {
