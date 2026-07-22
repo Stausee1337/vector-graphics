@@ -270,17 +270,17 @@ impl Quadratic {
     }
 
 
-    pub fn flatten(&self, points: &mut Vec<Vec2>, transform: Affine) {
+    pub fn flatten(&self, points: &mut Vec<Vec2>) {
         if self.error() <= 0.25 {
-            points.push(transform * self.p0);
-            points.push(transform * self.p1);
-            points.push(transform * self.p2);
+            points.push(self.p0);
+            points.push(self.p1);
+            points.push(self.p2);
             return;
         }
 
         let (q0, q1) = self.split();
-        q0.flatten(points, transform);
-        q1.flatten(points, transform);
+        q0.flatten(points);
+        q1.flatten(points);
     }
 }
 
@@ -330,18 +330,18 @@ impl Cubic {
         0.5 * get_dist(control1).max(get_dist(control2))
     }
 
-    pub fn flatten(&self, points: &mut Vec<Vec2>, transform: Affine) {
+    pub fn flatten(&self, points: &mut Vec<Vec2>) {
         if self.error() <= 0.25 {
-            points.push(transform * self.p0);
-            points.push(transform * self.p1);
-            points.push(transform * self.p2);
-            points.push(transform * self.p3);
+            points.push(self.p0);
+            points.push(self.p1);
+            points.push(self.p2);
+            points.push(self.p3);
             return;
         }
 
         let (q0, q1) = self.split();
-        q0.flatten(points, transform);
-        q1.flatten(points, transform);
+        q0.flatten(points);
+        q1.flatten(points);
     }
 }
 
@@ -399,25 +399,33 @@ pub fn draw_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
     for subpath in path.subpaths() {
         if subpath.len() < 2 { continue; }
 
+        // NOTE: instead of transforming all of the points during flattening (which I guess is
+        // fine, though), we could multiply the error threshold in the flattening by the transforms
+        // scale obtained through single value decomposition
+
         let PathElement::MoveTo(mut current_position) = subpath[0] else { unreachable!() };
+        current_position = transform * current_position;
 
         let start = points.len();
         for element in subpath {
             match element {
                 &PathElement::LineTo(endpoint) => {
-                    points.push(transform * current_position);
-                    points.push(transform * endpoint);
-                    current_position = endpoint;
+                    let tendpoint = transform * endpoint;
+                    points.push(current_position);
+                    points.push(tendpoint);
+                    current_position = tendpoint;
                 },
                 &PathElement::QuadTo(control_point, endpoint) => {
-                    let quadratic = Quadratic::new(current_position, control_point, endpoint);
-                    quadratic.flatten(&mut points, transform);
-                    current_position = endpoint;
+                    let tendpoint = transform * endpoint;
+                    let quadratic = Quadratic::new(current_position, transform * control_point, tendpoint);
+                    quadratic.flatten(&mut points);
+                    current_position = tendpoint;
                 },
                 &PathElement::CurveTo(control1, control2, endpoint) => {
-                    let cubic = Cubic::new(current_position, control1, control2, endpoint);
-                    cubic.flatten(&mut points, transform);
-                    current_position = endpoint;
+                    let tendpoint = transform * endpoint;
+                    let cubic = Cubic::new(current_position, transform * control1, transform * control2, tendpoint);
+                    cubic.flatten(&mut points);
+                    current_position = tendpoint;
                 }
                 PathElement::Close => {
                     runs.push((start, points.len() - 1));
