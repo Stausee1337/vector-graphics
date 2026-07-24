@@ -428,7 +428,9 @@ pub fn draw_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
                     current_position = tendpoint;
                 }
                 PathElement::Close => {
-                    runs.push((start, points.len() - 1));
+                    if points.len() > start {
+                        runs.push((start, points.len() - 1));
+                    }
                     break;
                 },
                 PathElement::MoveTo(..) => (),
@@ -542,7 +544,7 @@ pub mod primitives {
     pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: Color) {
         assert!(points.len() > 2);
         // TODO: pixel coverage based anti-aliasing without vertical supersampling
-        let vertical_subsamples = 5;
+        let vertical_subsamples = 5; // should be accepted as argument
 
         fn make_edge(start: Vec2, end: Vec2, vertical_subsamples: f32) -> Edge {
             let (start_x, start_y) = (start.x, start.y * vertical_subsamples);
