@@ -1,10 +1,10 @@
 use std::{f32, num::NonZeroU32, rc::Rc};
 
 use skrifa::{FontRef, MetadataProvider, instance::Location, outline::{DrawSettings, OutlinePen}, prelude::Size};
-use winit::{event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent}, event_loop::EventLoop, window::Window};
+use winit::{event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent}, event_loop::EventLoop, keyboard::Key, window::Window};
 use draw::{colors, primitives, draw_path, Canvas, Path, PathElement, Cubic, Vec2};
 
-use crate::draw::Affine;
+use crate::draw::{Affine, draw_path_hairline, get_offset_curve};
 
 mod app;
 mod draw;
@@ -13,7 +13,7 @@ const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/
 const INTER_REGULAR: &'static [u8] = include_bytes!("../Inter/Inter_18pt-Regular.ttf");
 const DEJAVU_SANS: &'static [u8] = include_bytes!("../DejaVuSans.ttf");
 
-fn intersects_circle(point: &Vec2, center: &Vec2, radius: f32) -> bool {
+fn intersects_circle(point: Vec2, center: Vec2, radius: f32) -> bool {
     return (center.x - point.x).abs() <= radius && (center.y - point.y).abs() <= radius;
 }
 
@@ -102,9 +102,15 @@ fn main() {
     let context = softbuffer::Context::new(event_loop.owned_display_handle()).unwrap();
 
     let mut mouse_position = Vec2::new(0.0, 0.0);
-    let mut transform = Affine::IDENTITY;
+    let transform = Affine::IDENTITY;
 
     let mut previous_position: Option<Vec2> = None;
+
+    let mut path = Path::new();
+    let mut cubic = Cubic::new(Vec2::new(100.0, 100.0), Vec2::new(200.0, 50.0), Vec2::new(400.0, 50.0), Vec2::new(500.0, 100.0));
+    let mut approx = cubic.clone();
+    let mut max_error = approx.evaluate(0.0);
+    let mut active_element: Option<usize> = None;
 
 
     let mut app = app::WinitAppBuilder::with_init(
@@ -142,33 +148,99 @@ fn main() {
                 let mut canvas = Canvas::from_raw_pixels(&mut buffer, width, height, width);
                 canvas.clear();
 
-                draw_glyph_sheet(&mut canvas, &font, transform * Affine::scale(SHEET_SCALE));
+                // draw_glyph_sheet(&mut canvas, &font, transform * Affine::scale(SHEET_SCALE));
+
+
+
+                path.clear();
+                get_offset_curve(&mut path, cubic.clone(), 0.5);
+                get_offset_curve(&mut path, Cubic { p0: cubic.p3, p1: cubic.p2, p2: cubic.p1, p3: cubic.p0 }, 0.5);
+                path.push(PathElement::Close);
+                // get_offset_curve(&mut path, cubic.clone(), -5.0);
+                // draw_path_hairline(&mut canvas, &path, transform, colors::WHITE);
+                draw_path(&mut canvas, &path, transform, colors::WHITE);
+
+                // path.clear();
+                // path.push_cubic(&cubic);
+                // draw_path_hairline(&mut canvas, &path, transform, colors::LIME);
+
+                primitives::line(&mut canvas, cubic.p0, cubic.p1, colors::GRAY);
+                primitives::line(&mut canvas, cubic.p2, cubic.p3, colors::GRAY);
+
+                primitives::circle(&mut canvas, cubic.p0, 7.0, colors::RED);
+                primitives::circle(&mut canvas, cubic.p3, 7.0, colors::RED);
+
+                primitives::circle(&mut canvas, cubic.p1, 7.0, colors::AQUA);
+                primitives::circle(&mut canvas, cubic.p2, 7.0, colors::AQUA);
+
+                // if let Some(max_error) = max_error {
+                //     primitives::circle(&mut canvas, max_error, 7.0, colors::RED);
+                // }
 
                 buffer.present().unwrap();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                if let Some(previous_position) = &mut previous_position {
-                    transform = Affine::translate(mouse_position - *previous_position) * transform;
-                    *previous_position = mouse_position;
-                    window.request_redraw();
-                }
+                // if let Some(previous_position) = &mut previous_position {
+                //     transform = Affine::translate(mouse_position - *previous_position) * transform;
+                //     *previous_position = mouse_position;
+                //     window.request_redraw();
+                // }
                 mouse_position = Vec2::new(position.x as f32, position.y as f32);
+
+                let point = match active_element {
+                    Some(0) => &mut cubic.p0,
+                    Some(1) => &mut cubic.p1,
+                    Some(2) => &mut cubic.p2,
+                    Some(3) => &mut cubic.p3,
+                    _ => return,
+                };
+
+                *point = mouse_position;
+
+                window.request_redraw();
 
 
             }
+            // WindowEvent::KeyboardInput { event, .. } => {
+            //     if event.state != ElementState::Pressed {
+            //         return;
+            //     }
+            //     if let Key::Character(str) = event.logical_key && str == "c" {
+            //         (approx, max_error) = get_offset_curve(&cubic, 20.0);
+            //         window.request_redraw();
+            //     }
+            // }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button != MouseButton::Left {
                     return;
                 }
+                // match state {
+                //     ElementState::Pressed => previous_position = Some(mouse_position),
+                //     ElementState::Released => previous_position = None,
+                // }
                 match state {
-                    ElementState::Pressed => previous_position = Some(mouse_position),
-                    ElementState::Released => previous_position = None,
+                    ElementState::Pressed => {
+                        if intersects_circle(mouse_position, cubic.p0, 10.0) {
+                            active_element = Some(0);
+                        } else if intersects_circle(mouse_position, cubic.p1, 10.0) {
+                            active_element = Some(1);
+                        } else if intersects_circle(mouse_position, cubic.p2, 10.0) {
+                            active_element = Some(2);
+                        } else if intersects_circle(mouse_position, cubic.p3, 10.0) {
+                            active_element = Some(3);
+                        } else {
+                            active_element = None;
+                        }
+
+                        window.request_redraw();
+                    },
+                    ElementState::Released => active_element = None,
                 }
             }
-            WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(_dx, dy), .. } => {
-                transform = Affine::translate(mouse_position) * Affine::scale((1.2f32).powf(dy)) * Affine::translate(-mouse_position) * transform;
-                window.request_redraw();
-            }
+            // WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(_dx, dy), .. } => {
+            //     transform = Affine::translate(mouse_position) * Affine::scale((1.2f32).powf(dy)) * Affine::translate(-mouse_position) * transform;
+            //     window.request_redraw();
+            // }
             WindowEvent::CloseRequested => {
                 elwt.exit();
             }

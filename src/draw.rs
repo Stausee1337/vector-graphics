@@ -291,7 +291,7 @@ impl<'a> Approx<'a> {
 
     fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
         let (t_subdiv, max_err) = self.get_max_error(&oc);
-        if max_err < 1.0 || level >= Self::MAX_SUBDIV {
+        if max_err <= 0.25 || level >= Self::MAX_SUBDIV {
             self.dest.push_cubic(&oc.approx);
             return;
         }
