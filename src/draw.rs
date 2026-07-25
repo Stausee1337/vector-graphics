@@ -81,7 +81,8 @@ struct OffsetCubic {
     approx: Cubic,
     offset: f32,
     coeffs: [f32; 7],
-    deriv_coeffs: [f32; 6],
+    deriv1_coeffs: [f32; 6],
+    deriv2_coeffs: [f32; 5],
 }
 
 impl OffsetCubic {
@@ -118,7 +119,7 @@ impl OffsetCubic {
             x3.sq() + y3.sq(),
         ];
     
-        let deriv_coeffs = [
+        let deriv1_coeffs = [
             coeffs[1] - coeffs[0],
             coeffs[2] - coeffs[1],
             coeffs[3] - coeffs[2],
@@ -127,7 +128,16 @@ impl OffsetCubic {
             coeffs[6] - coeffs[5]
         ];
 
-        Self { orig: cubic, approx: hermite.as_cubic(), offset, coeffs, deriv_coeffs }
+        let deriv2_coeffs = [
+            deriv1_coeffs[1] - deriv1_coeffs[0],
+            deriv1_coeffs[2] - deriv1_coeffs[1],
+            deriv1_coeffs[3] - deriv1_coeffs[2],
+            deriv1_coeffs[4] - deriv1_coeffs[3],
+            deriv1_coeffs[5] - deriv1_coeffs[4],
+        ];
+
+
+        Self { orig: cubic, approx: hermite.as_cubic(), offset, coeffs, deriv1_coeffs, deriv2_coeffs }
     }
 
     fn eval(&self, t: f32) -> f32 {
@@ -152,7 +162,7 @@ impl OffsetCubic {
             + b6 * self.coeffs[6]
     }
 
-    fn eval_deriv(&self, t: f32) -> f32 {
+    fn eval_deriv1(&self, t: f32) -> f32 {
         let u = 1.0 - t;
         let tt = t.sq();
         let uu = u.sq();
@@ -164,12 +174,34 @@ impl OffsetCubic {
         let b4 = 5.0*u*tt*tt;
         let b5 = tt*tt*t;
 
-        b0 * self.deriv_coeffs[0]
-            + b1 * self.deriv_coeffs[1]
-            + b2 * self.deriv_coeffs[2]
-            + b3 * self.deriv_coeffs[3]
-            + b4 * self.deriv_coeffs[4]
-            + b5 * self.deriv_coeffs[5]
+        6.0 * (
+            b0 * self.deriv1_coeffs[0]
+            + b1 * self.deriv1_coeffs[1]
+            + b2 * self.deriv1_coeffs[2]
+            + b3 * self.deriv1_coeffs[3]
+            + b4 * self.deriv1_coeffs[4]
+            + b5 * self.deriv1_coeffs[5]
+        )
+    }
+
+    fn eval_deriv2(&self, t: f32) -> f32 {
+        let u = 1.0 - t;
+        let tt = t.sq();
+        let uu = u.sq();
+
+        let b0 = uu*uu;
+        let b1 = 4.0*uu*u*t;
+        let b2 = 6.0*uu*tt;
+        let b3 = 4.0*u*t*tt;
+        let b4 = tt*tt;
+
+        6.0 * 5.0 * (
+            b0 * self.deriv2_coeffs[0]
+            + b1 * self.deriv2_coeffs[1]
+            + b2 * self.deriv2_coeffs[2]
+            + b3 * self.deriv2_coeffs[3]
+            + b4 * self.deriv2_coeffs[4]
+        )
     }
 
     fn eval_error(&self, t: f32) -> f32 {
@@ -181,34 +213,27 @@ impl OffsetCubic {
         let mut samples: [f32; N_SAMPLES] = [0.0; N_SAMPLES];
         let dt = 1.0 / (N_SAMPLES - 1) as f32;
         for i in 0..N_SAMPLES {
-            samples[i] = self.eval_deriv(dt * i as f32);
+            samples[i] = self.eval_deriv1(dt * i as f32);
         }
     
-        const EPSILON: f32 = 1e-3;
 
         let mut i = 0;
-        let mut extrema = vec![];
+        let mut x0s = vec![];
         while i < N_SAMPLES - 1 {
             let s0 = samples[i];
             let s1 = samples[i + 1];
             if s0 * s1 <= 0.0 {
                 let t0 = i as f32 * dt;
-                extrema.push(((t0, t0 + dt), (s0, s1)));
+                x0s.push(t0 + dt*0.5);
             }
             i += 1;
         }
 
-        if extrema.is_empty() { return None; }
+        if x0s.is_empty() { return None; }
 
         let mut local_max_err = (-1.0, 0.0);
-        for ((mut a, mut b), (mut ya, mut yb)) in extrema {
-            if ya > yb {
-                (a, b) = (b, a);
-                (ya, yb) = (yb, ya);
-            }
-
-            let k1 = 0.2 / (b-a);
-            let t_max = solve_itp(a, b, ya, yb, EPSILON, k1, 1, |x| self.eval_deriv(x));
+        for x0 in x0s {
+            let t_max = self.solve_newton(x0);
             let max = (t_max, self.eval_error(t_max));
 
             if max.1 > local_max_err.1 {
@@ -217,6 +242,26 @@ impl OffsetCubic {
         }
 
         Some(local_max_err)
+    }
+
+    fn solve_newton(&self, x0: f32) -> f32 {
+        const EPSILON: f32 = 1e-3;
+        const MAX_ITER: usize = 4;
+
+        let mut x = x0;
+        let mut y;
+        let mut y_dot;
+        let mut i = 0;
+        loop {
+            y = self.eval_deriv1(x);
+            y_dot = self.eval_deriv2(x);
+            x = x - y/y_dot;
+            i += 1;
+
+            if y.abs() < EPSILON || i >= MAX_ITER {
+                return x;
+            }
+        }
     }
 
     fn split(&self, t_subdiv: f32) -> (OffsetCubic, OffsetCubic) {
@@ -230,56 +275,13 @@ impl OffsetCubic {
     }
 }
 
-fn solve_itp(
-    mut a: f32,
-    mut b: f32,
-    mut ya: f32,
-    mut yb: f32,
-    epsilon: f32,
-    k1: f32, n0: usize,
-    f: impl Fn(f32) -> f32) -> f32 {
-
-    let n1_2 = (((b - a) / epsilon).log2().ceil() - 1.0).max(0.0) as usize;
-    let nmax = n0 + n1_2;
-    let mut scaled_epsilon = epsilon * (1u64 << nmax) as f32;
-    while b - a > 2.0 * epsilon {
-        let x1_2 = 0.5 * (a + b);
-        let r = scaled_epsilon - 0.5 * (b - a);
-        let xf = (yb * a - ya * b) / (yb - ya);
-        let sigma = x1_2 - xf;
-        // This has k2 = 2 hardwired for efficiency.
-        let delta = k1 * (b - a).powi(2);
-        let xt = if delta <= (x1_2 - xf).abs() {
-            xf + delta.copysign(sigma)
-        } else {
-            x1_2
-        };
-        let xitp = if (xt - x1_2).abs() <= r {
-            xt
-        } else {
-            x1_2 - r.copysign(sigma)
-        };
-        let yitp = f(xitp);
-        // println!("{yitp}");
-        if yitp > 0.0 {
-            b = xitp;
-            yb = yitp;
-        } else if yitp < 0.0 {
-            a = xitp;
-            ya = yitp;
-        } else {
-            return 0.5 * (xitp + xitp);
-        }
-        scaled_epsilon *= 0.5;
-    }
-    0.5 * (a + b)
-}
-
 struct Approx<'a> {
     dest: &'a mut Path,
 }
 
 impl<'a> Approx<'a> {
+    const MAX_SUBDIV: usize = 10;
+
     fn approx(dest: &'a mut Path, source: Cubic, offset: f32) {
         let oc = OffsetCubic::form_cubic_and_offset(source, offset);
         let mut approx = Approx { dest };
@@ -289,7 +291,7 @@ impl<'a> Approx<'a> {
 
     fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
         let (t_subdiv, max_err) = self.get_max_error(&oc);
-        if max_err < 1.0 || level > 10 {
+        if max_err < 1.0 || level >= Self::MAX_SUBDIV {
             self.dest.push_cubic(&oc.approx);
             return;
         }
