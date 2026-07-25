@@ -77,7 +77,8 @@ impl Scalar for f32 {
 }
 
 struct OffsetCubic {
-    hermite: Hermite,
+    orig: Cubic,
+    approx: Cubic,
     offset: f32,
     coeffs: [f32; 7],
     deriv_coeffs: [f32; 6],
@@ -126,7 +127,7 @@ impl OffsetCubic {
             coeffs[6] - coeffs[5]
         ];
 
-        Self { hermite, offset, coeffs, deriv_coeffs }
+        Self { orig: cubic, approx: hermite.as_cubic(), offset, coeffs, deriv_coeffs }
     }
 
     fn eval(&self, t: f32) -> f32 {
@@ -175,7 +176,7 @@ impl OffsetCubic {
         (self.eval(t).abs() - self.offset.sq()).abs()
     }
 
-    fn find_max_error(&self) -> Option<(f32, f32)> {
+    fn compute_max_error(&self) -> Option<(f32, f32)> {
         const N_SAMPLES: usize = 51;
         let mut samples: [f32; N_SAMPLES] = [0.0; N_SAMPLES];
         let dt = 1.0 / (N_SAMPLES - 1) as f32;
@@ -186,21 +187,21 @@ impl OffsetCubic {
         const EPSILON: f32 = 1e-3;
 
         let mut i = 0;
-        let mut maxima = vec![];
+        let mut extrema = vec![];
         while i < N_SAMPLES - 1 {
             let s0 = samples[i];
             let s1 = samples[i + 1];
             if s0 * s1 <= 0.0 {
                 let t0 = i as f32 * dt;
-                maxima.push(((t0, t0 + dt), (s0, s1)));
+                extrema.push(((t0, t0 + dt), (s0, s1)));
             }
             i += 1;
         }
 
-        if maxima.is_empty() { return None; }
+        if extrema.is_empty() { return None; }
 
         let mut local_max_err = (-1.0, 0.0);
-        for ((mut a, mut b), (mut ya, mut yb)) in maxima {
+        for ((mut a, mut b), (mut ya, mut yb)) in extrema {
             if ya > yb {
                 (a, b) = (b, a);
                 (ya, yb) = (yb, ya);
@@ -216,6 +217,16 @@ impl OffsetCubic {
         }
 
         Some(local_max_err)
+    }
+
+    fn split(&self, t_subdiv: f32) -> (OffsetCubic, OffsetCubic) {
+        let (cubic1, cubic2) = self.orig.split_at(t_subdiv);
+        // let cubic1 = self.orig.subsegment(0.0, t_subdiv);
+        // let cubic2 = self.orig.subsegment(t_subdiv, 1.0);
+        // TODO: can probably be optimized by the information we already have
+        let oc1 = Self::form_cubic_and_offset(cubic1, self.offset);
+        let oc2 = Self::form_cubic_and_offset(cubic2, self.offset);
+        (oc1, oc2)
     }
 }
 
@@ -264,18 +275,49 @@ fn solve_itp(
     0.5 * (a + b)
 }
 
-pub fn get_offset_curve(cubic: &Cubic, offset: f32) -> (Cubic, Option<Vec2>) {
-    let approx = OffsetCubic::form_cubic_and_offset(cubic.clone(), offset);
-    let hermite = approx.hermite.as_cubic();
-    let p_max_error = if let Some((t_max, max_err)) = approx.find_max_error() {
-        println!("{t_max}, {}", max_err.sqrt());
-        Some(hermite.evaluate(t_max))
-    } else {
-        None
-    };
-    // println!("{max_err}");
-    // let t_max = 0.0;
-    (hermite, p_max_error)
+struct Approx<'a> {
+    dest: &'a mut Path,
+}
+
+impl<'a> Approx<'a> {
+    fn approx(dest: &'a mut Path, source: Cubic, offset: f32) {
+        let oc = OffsetCubic::form_cubic_and_offset(source, offset);
+        let mut approx = Approx { dest };
+
+        approx.make_offset_recursively(oc, 0);
+    }
+
+    fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
+        let (t_subdiv, max_err) = self.get_max_error(&oc);
+        if max_err < 1.0 || level > 10 {
+            self.dest.push_cubic(&oc.approx);
+            return;
+        }
+        let (oc1, oc2) = oc.split(t_subdiv);
+        self.make_offset_recursively(oc1, level + 1);
+        self.make_offset_recursively(oc2, level + 1);
+    }
+
+    fn get_max_error(&self, oc: &OffsetCubic) -> (f32, f32) {
+        if let Some((t_subdiv, max_err)) = oc.compute_max_error() {
+            return (t_subdiv, max_err.sqrt());
+        }
+        (0.5, oc.eval_error(0.5).sqrt())
+    }
+}
+
+pub fn get_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) {
+    // let oc = OffsetCubic::form_cubic_and_offset(cubic.clone(), offset);
+    // let p_max_error = if let Some((t_max, max_err)) = oc.compute_max_error() {
+    //     println!("{t_max}, {}", max_err.sqrt());
+    //     Some(oc.approx.evaluate(t_max))
+    // } else {
+    //     None
+    // };
+    // // println!("{max_err}");
+    // // let t_max = 0.0;
+    // (oc.approx, p_max_error)
+    Approx::approx(dest, cubic, offset)
 }
 
 #[derive(Clone, Copy)]
@@ -596,6 +638,17 @@ impl Cubic {
         (Cubic::new(self.p0, q1, q2, split_point), Cubic::new(split_point, r1, r2, self.p3))
     }
 
+    pub fn split_at(&self, t: f32) -> (Cubic, Cubic) {
+        let split_point = self.evaluate(t);
+        let s = self.p1.lerp(self.p2, t);
+        let q1 = self.p0.lerp(self.p1, t);
+        let q2 = q1.lerp(s, t);
+        let r2 = self.p2.lerp(self.p3, t);
+        let r1 = s.lerp(r2, t);
+
+        (Cubic::new(self.p0, q1, q2, split_point), Cubic::new(split_point, r1, r2, self.p3))
+    }
+
     pub fn error(&self) -> f32 {
         let control1 = self.p1 - self.p0;
         let control2 = self.p2 - self.p0;
@@ -612,17 +665,20 @@ impl Cubic {
     }
 
     pub fn flatten(&self, points: &mut Vec<Vec2>) {
-        if self.error() <= 0.25 {
-            points.push(self.p0);
-            points.push(self.p1);
-            points.push(self.p2);
-            points.push(self.p3);
-            return;
-        }
+        fn inner(curve: &Cubic, points: &mut Vec<Vec2>, level: usize) {
+            if curve.error() <= 0.25 || level > 10 {
+                points.push(curve.p0);
+                points.push(curve.p1);
+                points.push(curve.p2);
+                points.push(curve.p3);
+                return;
+            }
 
-        let (q0, q1) = self.split();
-        q0.flatten(points);
-        q1.flatten(points);
+            let (q0, q1) = curve.split();
+            inner(&q0, points, level + 1);
+            inner(&q1, points, level + 1);
+        }
+        inner(self, points, 0);
     }
 }
 
