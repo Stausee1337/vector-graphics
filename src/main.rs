@@ -1,13 +1,19 @@
 use std::{f32, num::NonZeroU32, rc::Rc};
 
 use skrifa::{FontRef, MetadataProvider, instance::Location, outline::{DrawSettings, OutlinePen}, prelude::Size};
-use winit::{event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent}, event_loop::EventLoop, keyboard::Key, window::Window};
-use draw::{colors, primitives, draw_path, Canvas, Path, PathElement, Cubic, Vec2};
+use winit::{event::{ElementState, MouseButton, WindowEvent}, event_loop::EventLoop, window::Window};
 
-use crate::draw::{Affine, draw_path_hairline, get_offset_curve};
+use vector_graphics::{
+    affine::Affine,
+    offset::get_offset_curve,
+    color::colors,
+    canvas::Canvas,
+    path::{Path, PathElement, Cubic, fill_path},
+    primitives,
+    vec::Vec2
+};
 
 mod app;
-mod draw;
 
 const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
 const INTER_REGULAR: &'static [u8] = include_bytes!("../Inter/Inter_18pt-Regular.ttf");
@@ -77,7 +83,7 @@ fn draw_glyph_sheet(canvas: &mut Canvas, font: &FontRef, transform: Affine) {
             let mut outline_pen = SkrifaOutlinePen::new(&mut path);
             outline_glyph.draw(DrawSettings::unhinted(Size::unscaled(), &Location::default()), &mut outline_pen).unwrap();
 
-            draw_path(
+            fill_path(
                 canvas,
                 &path,
                 transform * Affine::new([1.0, 0.0, 0.0, -1.0, pen_x, pen_y]),
@@ -153,12 +159,12 @@ fn main() {
 
 
                 path.clear();
-                get_offset_curve(&mut path, cubic.clone(), 0.5);
-                get_offset_curve(&mut path, Cubic { p0: cubic.p3, p1: cubic.p2, p2: cubic.p1, p3: cubic.p0 }, 0.5);
+                get_offset_curve(&mut path, cubic.clone(), 10.0);
+                get_offset_curve(&mut path, Cubic { p0: cubic.p3, p1: cubic.p2, p2: cubic.p1, p3: cubic.p0 }, 10.0);
                 path.push(PathElement::Close);
                 // get_offset_curve(&mut path, cubic.clone(), -5.0);
                 // draw_path_hairline(&mut canvas, &path, transform, colors::WHITE);
-                draw_path(&mut canvas, &path, transform, colors::WHITE);
+                fill_path(&mut canvas, &path, transform, colors::WHITE);
 
                 // path.clear();
                 // path.push_cubic(&cubic);
