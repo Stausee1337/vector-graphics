@@ -1,4 +1,4 @@
-use std::ops::{Add, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Neg, Sub};
 
 pub struct Canvas<'a> {
     pub pixels: &'a mut [u32],
@@ -47,6 +47,237 @@ impl<'a> Canvas<'a> {
     }
 }
 
+struct Hermite {
+    p0: Vec2,
+    v0: Vec2,
+    p1: Vec2,
+    v1: Vec2
+}
+
+impl Hermite {
+    fn as_cubic(&self) -> Cubic {
+        // H(t)        =        p0 B0(t) +   (p0 + (1/3)v0) B1(t) +   (p1 - (1/3)v1) B2(t) +        p1 B3(t)
+        Cubic {
+            p0: self.p0,
+            p1: self.p0 + self.v0/3.0,
+            p2: self.p1 - self.v1/3.0,
+            p3: self.p1,
+        }
+    }
+}
+
+pub trait Scalar {
+    fn sq(self) -> Self;
+}
+
+impl Scalar for f32 {
+    fn sq(self) -> Self {
+        self * self
+    }
+}
+
+struct OffsetCubic {
+    hermite: Hermite,
+    offset: f32,
+    coeffs: [f32; 7],
+    deriv_coeffs: [f32; 6],
+}
+
+impl OffsetCubic {
+    fn eval_curve_and_derivative(cubic: &Cubic, offset: f32, t: f32) -> (Vec2, Vec2) {
+        let derivative = cubic.derivative().evaluate(t);
+        let point = cubic.evaluate(t) + Vec2::new(derivative.y, -derivative.x).norm() * offset;
+        let deriv = derivative * (1.0 + offset * cubic.curvature(t));
+        (point, deriv)
+    }
+
+    fn form_cubic_and_offset(cubic: Cubic, offset: f32) -> Self {
+        let (p0, v0) = Self::eval_curve_and_derivative(&cubic, offset, 0.0);
+        let (p1, v1) = Self::eval_curve_and_derivative(&cubic, offset, 1.0);
+
+        let hermite = Hermite { p0, p1, v0, v1 };
+
+        let i0 = cubic.p0 - hermite.p0;
+        let i1 = cubic.p1 - hermite.p0 - hermite.v0/3.0;
+        let i2 = cubic.p2 - hermite.p1 + hermite.v1/3.0;
+        let i3 = cubic.p3 - hermite.p1;
+
+        let Vec2 { x: x0, y: y0 } = i0;
+        let Vec2 { x: x1, y: y1 } = i1;
+        let Vec2 { x: x2, y: y2 } = i2;
+        let Vec2 { x: x3, y: y3 } = i3;
+
+        let coeffs = [
+            x0.sq() + y0.sq(),
+            x0*x1 + y0*y1,
+            0.4*x0*x2 + 0.6*x1.sq() + 0.4*y0*y2 + 0.6*y1.sq(),
+            0.1*x0*x3 + 0.9*x1*x2 + 0.1*y0*y3 + 0.9*y1*y2,
+            0.4*x1*x3 + 0.6*x2.sq() + 0.4*y1*y3 + 0.6*y2.sq(),
+            x2*x3 + y2*y3,
+            x3.sq() + y3.sq(),
+        ];
+    
+        let deriv_coeffs = [
+            coeffs[1] - coeffs[0],
+            coeffs[2] - coeffs[1],
+            coeffs[3] - coeffs[2],
+            coeffs[4] - coeffs[3],
+            coeffs[5] - coeffs[4],
+            coeffs[6] - coeffs[5]
+        ];
+
+        Self { hermite, offset, coeffs, deriv_coeffs }
+    }
+
+    fn eval(&self, t: f32) -> f32 {
+        let u = 1.0 - t;
+        let tt = t.sq();
+        let uu = u.sq();
+
+        let b0 = uu*uu*uu;
+        let b1 = 6.0*uu*uu*u*t;
+        let b2 = 15.0*uu*uu*tt;
+        let b3 = 20.0*uu*u*tt*t;
+        let b4 = 15.0*uu*tt*tt;
+        let b5 = 6.0*u*tt*tt*t;
+        let b6 = tt*tt*tt;
+
+        b0 * self.coeffs[0]
+            + b1 * self.coeffs[1]
+            + b2 * self.coeffs[2]
+            + b3 * self.coeffs[3]
+            + b4 * self.coeffs[4]
+            + b5 * self.coeffs[5]
+            + b6 * self.coeffs[6]
+    }
+
+    fn eval_deriv(&self, t: f32) -> f32 {
+        let u = 1.0 - t;
+        let tt = t.sq();
+        let uu = u.sq();
+
+        let b0 = uu*uu*u;
+        let b1 = 5.0*uu*uu*t;
+        let b2 = 10.0*uu*u*tt;
+        let b3 = 10.0*uu*t*tt;
+        let b4 = 5.0*u*tt*tt;
+        let b5 = tt*tt*t;
+
+        b0 * self.deriv_coeffs[0]
+            + b1 * self.deriv_coeffs[1]
+            + b2 * self.deriv_coeffs[2]
+            + b3 * self.deriv_coeffs[3]
+            + b4 * self.deriv_coeffs[4]
+            + b5 * self.deriv_coeffs[5]
+    }
+
+    fn eval_error(&self, t: f32) -> f32 {
+        (self.eval(t).abs() - self.offset.sq()).abs()
+    }
+
+    fn find_max_error(&self) -> Option<(f32, f32)> {
+        const N_SAMPLES: usize = 51;
+        let mut samples: [f32; N_SAMPLES] = [0.0; N_SAMPLES];
+        let dt = 1.0 / (N_SAMPLES - 1) as f32;
+        for i in 0..N_SAMPLES {
+            samples[i] = self.eval_deriv(dt * i as f32);
+        }
+    
+        const EPSILON: f32 = 1e-3;
+
+        let mut i = 0;
+        let mut maxima = vec![];
+        while i < N_SAMPLES - 1 {
+            let s0 = samples[i];
+            let s1 = samples[i + 1];
+            if s0 * s1 <= 0.0 {
+                let t0 = i as f32 * dt;
+                maxima.push(((t0, t0 + dt), (s0, s1)));
+            }
+            i += 1;
+        }
+
+        if maxima.is_empty() { return None; }
+
+        let mut local_max_err = (-1.0, 0.0);
+        for ((mut a, mut b), (mut ya, mut yb)) in maxima {
+            if ya > yb {
+                (a, b) = (b, a);
+                (ya, yb) = (yb, ya);
+            }
+
+            let k1 = 0.2 / (b-a);
+            let t_max = solve_itp(a, b, ya, yb, EPSILON, k1, 1, |x| self.eval_deriv(x));
+            let max = (t_max, self.eval_error(t_max));
+
+            if max.1 > local_max_err.1 {
+                local_max_err = max;
+            }
+        }
+
+        Some(local_max_err)
+    }
+}
+
+fn solve_itp(
+    mut a: f32,
+    mut b: f32,
+    mut ya: f32,
+    mut yb: f32,
+    epsilon: f32,
+    k1: f32, n0: usize,
+    f: impl Fn(f32) -> f32) -> f32 {
+
+    let n1_2 = (((b - a) / epsilon).log2().ceil() - 1.0).max(0.0) as usize;
+    let nmax = n0 + n1_2;
+    let mut scaled_epsilon = epsilon * (1u64 << nmax) as f32;
+    while b - a > 2.0 * epsilon {
+        let x1_2 = 0.5 * (a + b);
+        let r = scaled_epsilon - 0.5 * (b - a);
+        let xf = (yb * a - ya * b) / (yb - ya);
+        let sigma = x1_2 - xf;
+        // This has k2 = 2 hardwired for efficiency.
+        let delta = k1 * (b - a).powi(2);
+        let xt = if delta <= (x1_2 - xf).abs() {
+            xf + delta.copysign(sigma)
+        } else {
+            x1_2
+        };
+        let xitp = if (xt - x1_2).abs() <= r {
+            xt
+        } else {
+            x1_2 - r.copysign(sigma)
+        };
+        let yitp = f(xitp);
+        // println!("{yitp}");
+        if yitp > 0.0 {
+            b = xitp;
+            yb = yitp;
+        } else if yitp < 0.0 {
+            a = xitp;
+            ya = yitp;
+        } else {
+            return 0.5 * (xitp + xitp);
+        }
+        scaled_epsilon *= 0.5;
+    }
+    0.5 * (a + b)
+}
+
+pub fn get_offset_curve(cubic: &Cubic, offset: f32) -> (Cubic, Option<Vec2>) {
+    let approx = OffsetCubic::form_cubic_and_offset(cubic.clone(), offset);
+    let hermite = approx.hermite.as_cubic();
+    let p_max_error = if let Some((t_max, max_err)) = approx.find_max_error() {
+        println!("{t_max}, {}", max_err.sqrt());
+        Some(hermite.evaluate(t_max))
+    } else {
+        None
+    };
+    // println!("{max_err}");
+    // let t_max = 0.0;
+    (hermite, p_max_error)
+}
+
 #[derive(Clone, Copy)]
 pub struct Vec2 {
     pub x: f32,
@@ -63,11 +294,15 @@ impl Vec2 {
     }
 
     pub fn length(self) -> f32 {
-        self.dot(self).sqrt()
+        self.x.hypot(self.y)
     }
 
     pub fn lerp(self, other: Self, t: f32) -> Self { 
         self + (other - self)*t.clamp(0.0, 1.0)
+    }
+
+    pub fn norm(self) -> Vec2 {
+        self/self.length()
     }
 }
 
@@ -76,6 +311,14 @@ impl Mul<f32> for Vec2 {
 
     fn mul(self, lambda: f32) -> Vec2 {
         Vec2 { x: self.x * lambda, y: self.y * lambda }
+    }
+}
+
+impl Div<f32> for Vec2 {
+    type Output = Vec2;
+
+    fn div(self, rhs: f32) -> Vec2 {
+        self * rhs.recip()
     }
 }
 
@@ -230,9 +473,25 @@ pub mod colors {
     use super::Color;
 
     pub const WHITE: Color = Color::new(0xffffffff);
+    pub const GRAY : Color = Color::new(0xff7f7f7f);
     pub const RED  : Color = Color::new(0xffff0000);
     pub const LIME : Color = Color::new(0xff00ff00);
     pub const AQUA : Color = Color::new(0xff00ffff);
+}
+
+pub struct Line {
+    p0: Vec2,
+    p1: Vec2,
+}
+
+impl Line {
+    pub fn new(p0: Vec2, p1: Vec2) -> Self {
+        Line { p0, p1 }
+    }
+
+    pub fn evaluate(&self, t: f32) -> Vec2 {
+        self.p0.lerp(self.p1, t)
+    }
 }
 
 pub struct Quadratic {
@@ -269,6 +528,9 @@ impl Quadratic {
         self.p0*s*s + self.p1*2.0*s*t + self.p2*t*t
     }
 
+    pub fn derivative(&self) -> Line {
+        Line::new((self.p1 - self.p0)*2.0, (self.p2 - self.p1)*2.0)
+    }
 
     pub fn flatten(&self, points: &mut Vec<Vec2>) {
         if self.error() <= 0.25 {
@@ -284,6 +546,7 @@ impl Quadratic {
     }
 }
 
+#[derive(Clone)]
 pub struct Cubic {
     pub p0: Vec2,
     pub p1: Vec2,
@@ -302,6 +565,24 @@ impl Cubic {
         let u = 1.0 - t;
         let u2 = u * u;
         self.p0*u2*u + self.p1*3.0*u2*t + self.p2*3.0*u*t2 + self.p3*t2*t
+    }
+
+    pub fn derivative(&self) -> Quadratic {
+        Quadratic::new((self.p1 - self.p0)*3.0, (self.p2 - self.p1)*3.0, (self.p3 - self.p2)*3.0)
+    }
+
+    pub fn curvature(&self, t: f32) -> f32 {
+        let derivative1 = self.derivative();
+        let derivative2 = derivative1.derivative();
+
+        let d1 = derivative1.evaluate(t);
+        let d2 = derivative2.evaluate(t);
+
+        // κ = (x'y'' - y'x'')/(x'² + y'²)^(3 / 2)
+
+        let num = d1.x * d2.y - d1.y * d2.x;
+        let denom = d1.x.hypot(d1.y);
+        num/(denom * denom * denom)
     }
 
     pub fn split(&self) -> (Cubic, Cubic) {
@@ -357,6 +638,15 @@ impl Path {
 
     pub fn clear(&mut self) {
         self.elements.clear();
+    }
+
+    pub fn push_cubic(&mut self, cubic: &Cubic) {
+        if self.elements.is_empty() {
+            self.elements.push(PathElement::MoveTo(cubic.p0));
+        } else {
+            self.elements.push(PathElement::LineTo(cubic.p0));
+        }
+        self.elements.push(PathElement::CurveTo(cubic.p1, cubic.p2, cubic.p3));
     }
 
     pub fn push(&mut self, element: PathElement) {
@@ -439,6 +729,56 @@ pub fn draw_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
     }
 
     primitives::polygon(canvas, &points, &runs, color);
+}
+
+pub fn draw_path_hairline(canvas: &mut Canvas, path: &Path, transform: Affine, color: Color) {
+    let mut points = vec![];
+
+    for subpath in path.subpaths() {
+        if subpath.len() < 2 { continue; }
+
+        // NOTE: instead of transforming all of the points during flattening (which I guess is
+        // fine, though), we could multiply the error threshold in the flattening by the transforms
+        // scale obtained through single value decomposition
+        points.clear();
+
+        let PathElement::MoveTo(mut current_position) = subpath[0] else { unreachable!() };
+        current_position = transform * current_position;
+
+        let start = current_position;
+        for element in subpath {
+            match element {
+                &PathElement::LineTo(endpoint) => {
+                    let tendpoint = transform * endpoint;
+                    points.push(current_position);
+                    points.push(tendpoint);
+                    current_position = tendpoint;
+                },
+                &PathElement::QuadTo(control_point, endpoint) => {
+                    let tendpoint = transform * endpoint;
+                    let quadratic = Quadratic::new(current_position, transform * control_point, tendpoint);
+                    quadratic.flatten(&mut points);
+                    current_position = tendpoint;
+                },
+                &PathElement::CurveTo(control1, control2, endpoint) => {
+                    let tendpoint = transform * endpoint;
+                    let cubic = Cubic::new(current_position, transform * control1, transform * control2, tendpoint);
+                    cubic.flatten(&mut points);
+                    current_position = tendpoint;
+                }
+                PathElement::Close => {
+                    points.push(start);
+                }
+                PathElement::MoveTo(..) => (),
+            }
+        }
+
+        let mut i = 0;
+        while i < points.len() - 1 {
+            primitives::line(canvas, points[i], points[i + 1], color);
+            i += 1;
+        }
+    }
 }
 
 pub mod primitives {
