@@ -1,23 +1,17 @@
 use std::{f32, num::NonZeroU32, rc::Rc};
 
 use skrifa::{FontRef, MetadataProvider, instance::Location, outline::{DrawSettings, OutlinePen}, prelude::Size};
-use winit::{event::{ElementState, MouseButton, WindowEvent}, event_loop::EventLoop, window::Window};
+use winit::{event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent}, event_loop::EventLoop, window::Window};
 
 use vector_graphics::{
-    affine::Affine,
-    offset::get_offset_curve,
-    color::colors,
-    canvas::Canvas,
-    path::{Path, PathElement, Cubic, fill_path},
-    primitives,
-    vec::Vec2
+    affine::Affine, canvas::Canvas, color::colors, path::{Path, PathElement, fill_path, stroke_path}, stroke::Stroke, vec::Vec2
 };
 
 mod app;
 
 const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
-const INTER_REGULAR: &'static [u8] = include_bytes!("../Inter/Inter_18pt-Regular.ttf");
-const DEJAVU_SANS: &'static [u8] = include_bytes!("../DejaVuSans.ttf");
+// const INTER_REGULAR: &'static [u8] = include_bytes!("../Inter/Inter_18pt-Regular.ttf");
+// const DEJAVU_SANS: &'static [u8] = include_bytes!("../DejaVuSans.ttf");
 
 fn intersects_circle(point: Vec2, center: Vec2, radius: f32) -> bool {
     return (center.x - point.x).abs() <= radius && (center.y - point.y).abs() <= radius;
@@ -43,7 +37,7 @@ impl<'a> OutlinePen for SkrifaOutlinePen<'a> {
     }
 
     fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
-        self.path.push(PathElement::QuadTo(Vec2::new(cx0, cy0), Vec2::new(x, y))); 
+        self.path.push(PathElement::QuadTo(Vec2::new(cx0, cy0), Vec2::new(x, y)));
     }
 
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
@@ -72,6 +66,8 @@ fn draw_glyph_sheet(canvas: &mut Canvas, font: &FontRef, transform: Affine) {
     let mut path = Path::new();
     let mut width = 0.0;
 
+    let stroke = Stroke { width: 10.0 };
+
     for line in CHAR_SHEET {
         for char in line.chars() {
             let glyph_id = charmap.map(char).unwrap();
@@ -88,6 +84,13 @@ fn draw_glyph_sheet(canvas: &mut Canvas, font: &FontRef, transform: Affine) {
                 &path,
                 transform * Affine::new([1.0, 0.0, 0.0, -1.0, pen_x, pen_y]),
                 colors::WHITE);
+            
+            stroke_path(
+                canvas,
+                &path,
+                &stroke,
+                transform * Affine::new([1.0, 0.0, 0.0, -1.0, pen_x, pen_y]),
+                colors::AQUA);
 
             pen_x += advance;
         }
@@ -102,21 +105,21 @@ fn draw_glyph_sheet(canvas: &mut Canvas, font: &FontRef, transform: Affine) {
 const SHEET_SCALE: f32 = 0.1;
 
 fn main() {
-    let font = FontRef::new(DEJAVU_SANS).unwrap();
+    let font = FontRef::new(JBM_REGULAR).unwrap();
 
     let event_loop = EventLoop::new().unwrap();
     let context = softbuffer::Context::new(event_loop.owned_display_handle()).unwrap();
 
     let mut mouse_position = Vec2::new(0.0, 0.0);
-    let transform = Affine::IDENTITY;
+    let mut transform = Affine::IDENTITY;
 
     let mut previous_position: Option<Vec2> = None;
 
-    let mut path = Path::new();
-    let mut cubic = Cubic::new(Vec2::new(100.0, 100.0), Vec2::new(200.0, 50.0), Vec2::new(400.0, 50.0), Vec2::new(500.0, 100.0));
-    let mut approx = cubic.clone();
-    let mut max_error = approx.evaluate(0.0);
-    let mut active_element: Option<usize> = None;
+    // let mut path = Path::new();
+    // let mut cubic = Cubic::new(Vec2::new(100.0, 100.0), Vec2::new(200.0, 50.0), Vec2::new(400.0, 50.0), Vec2::new(500.0, 100.0));
+    // let mut approx = cubic.clone();
+    // let mut max_error = approx.evaluate(0.0);
+    // let mut active_element: Option<usize> = None;
 
 
     let mut app = app::WinitAppBuilder::with_init(
@@ -154,30 +157,32 @@ fn main() {
                 let mut canvas = Canvas::from_raw_pixels(&mut buffer, width, height, width);
                 canvas.clear();
 
-                // draw_glyph_sheet(&mut canvas, &font, transform * Affine::scale(SHEET_SCALE));
+                draw_glyph_sheet(&mut canvas, &font, transform * Affine::scale(SHEET_SCALE));
 
 
 
-                path.clear();
-                get_offset_curve(&mut path, cubic.clone(), 10.0);
-                get_offset_curve(&mut path, Cubic { p0: cubic.p3, p1: cubic.p2, p2: cubic.p1, p3: cubic.p0 }, 10.0);
-                path.push(PathElement::Close);
+                // path.clear();
+                // // how do you do stroking?
+                // compute_offset_curve(&mut path, &cubic, 10.0);
+                // // are you supposed to just "invert" the curve like this? Probably not?
+                // compute_offset_curve(&mut path, &Cubic { p0: cubic.p3, p1: cubic.p2, p2: cubic.p1, p3: cubic.p0 }, 10.0);
+                // path.push(PathElement::Close);
                 // get_offset_curve(&mut path, cubic.clone(), -5.0);
                 // draw_path_hairline(&mut canvas, &path, transform, colors::WHITE);
-                fill_path(&mut canvas, &path, transform, colors::WHITE);
+                // fill_path(&mut canvas, &path, transform, colors::WHITE);
 
                 // path.clear();
                 // path.push_cubic(&cubic);
                 // draw_path_hairline(&mut canvas, &path, transform, colors::LIME);
 
-                primitives::line(&mut canvas, cubic.p0, cubic.p1, colors::GRAY);
-                primitives::line(&mut canvas, cubic.p2, cubic.p3, colors::GRAY);
+                // primitives::line(&mut canvas, cubic.p0, cubic.p1, colors::GRAY);
+                // primitives::line(&mut canvas, cubic.p2, cubic.p3, colors::GRAY);
 
-                primitives::circle(&mut canvas, cubic.p0, 7.0, colors::RED);
-                primitives::circle(&mut canvas, cubic.p3, 7.0, colors::RED);
+                // primitives::circle(&mut canvas, cubic.p0, 7.0, colors::RED);
+                // primitives::circle(&mut canvas, cubic.p3, 7.0, colors::RED);
 
-                primitives::circle(&mut canvas, cubic.p1, 7.0, colors::AQUA);
-                primitives::circle(&mut canvas, cubic.p2, 7.0, colors::AQUA);
+                // primitives::circle(&mut canvas, cubic.p1, 7.0, colors::AQUA);
+                // primitives::circle(&mut canvas, cubic.p2, 7.0, colors::AQUA);
 
                 // if let Some(max_error) = max_error {
                 //     primitives::circle(&mut canvas, max_error, 7.0, colors::RED);
@@ -186,24 +191,24 @@ fn main() {
                 buffer.present().unwrap();
             }
             WindowEvent::CursorMoved { position, .. } => {
-                // if let Some(previous_position) = &mut previous_position {
-                //     transform = Affine::translate(mouse_position - *previous_position) * transform;
-                //     *previous_position = mouse_position;
-                //     window.request_redraw();
-                // }
+                if let Some(previous_position) = &mut previous_position {
+                    transform = Affine::translate(mouse_position - *previous_position) * transform;
+                    *previous_position = mouse_position;
+                    window.request_redraw();
+                }
                 mouse_position = Vec2::new(position.x as f32, position.y as f32);
 
-                let point = match active_element {
-                    Some(0) => &mut cubic.p0,
-                    Some(1) => &mut cubic.p1,
-                    Some(2) => &mut cubic.p2,
-                    Some(3) => &mut cubic.p3,
-                    _ => return,
-                };
+                // let point = match active_element {
+                //     Some(0) => &mut cubic.p0,
+                //     Some(1) => &mut cubic.p1,
+                //     Some(2) => &mut cubic.p2,
+                //     Some(3) => &mut cubic.p3,
+                //     _ => return,
+                // };
 
-                *point = mouse_position;
+                // *point = mouse_position;
 
-                window.request_redraw();
+                // window.request_redraw();
 
 
             }
@@ -220,33 +225,33 @@ fn main() {
                 if button != MouseButton::Left {
                     return;
                 }
-                // match state {
-                //     ElementState::Pressed => previous_position = Some(mouse_position),
-                //     ElementState::Released => previous_position = None,
-                // }
                 match state {
-                    ElementState::Pressed => {
-                        if intersects_circle(mouse_position, cubic.p0, 10.0) {
-                            active_element = Some(0);
-                        } else if intersects_circle(mouse_position, cubic.p1, 10.0) {
-                            active_element = Some(1);
-                        } else if intersects_circle(mouse_position, cubic.p2, 10.0) {
-                            active_element = Some(2);
-                        } else if intersects_circle(mouse_position, cubic.p3, 10.0) {
-                            active_element = Some(3);
-                        } else {
-                            active_element = None;
-                        }
-
-                        window.request_redraw();
-                    },
-                    ElementState::Released => active_element = None,
+                    ElementState::Pressed => previous_position = Some(mouse_position),
+                    ElementState::Released => previous_position = None,
                 }
+                // match state {
+                //     ElementState::Pressed => {
+                //         if intersects_circle(mouse_position, cubic.p0, 10.0) {
+                //             active_element = Some(0);
+                //         } else if intersects_circle(mouse_position, cubic.p1, 10.0) {
+                //             active_element = Some(1);
+                //         } else if intersects_circle(mouse_position, cubic.p2, 10.0) {
+                //             active_element = Some(2);
+                //         } else if intersects_circle(mouse_position, cubic.p3, 10.0) {
+                //             active_element = Some(3);
+                //         } else {
+                //             active_element = None;
+                //         }
+
+                //         window.request_redraw();
+                //     },
+                //     ElementState::Released => active_element = None,
+                // }
             }
-            // WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(_dx, dy), .. } => {
-            //     transform = Affine::translate(mouse_position) * Affine::scale((1.2f32).powf(dy)) * Affine::translate(-mouse_position) * transform;
-            //     window.request_redraw();
-            // }
+            WindowEvent::MouseWheel { delta: MouseScrollDelta::LineDelta(_dx, dy), .. } => {
+                transform = Affine::translate(mouse_position) * Affine::scale((1.2f32).powf(dy)) * Affine::translate(-mouse_position) * transform;
+                window.request_redraw();
+            }
             WindowEvent::CloseRequested => {
                 elwt.exit();
             }

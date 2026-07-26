@@ -5,5 +5,6 @@ pub mod color;
 pub mod offset;
 pub mod path;
 pub mod primitives;
+pub mod stroke;
 pub mod vec;
 

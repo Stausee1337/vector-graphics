@@ -1,4 +1,4 @@
-use crate::{primitives, affine::Affine, canvas::Canvas, color::Color, vec::Vec2};
+use crate::{affine::Affine, canvas::Canvas, color::Color, primitives, stroke::{self, Stroke}, vec::Vec2};
 
 #[derive(Clone, Copy)]
 pub enum PathElement {
@@ -7,6 +7,18 @@ pub enum PathElement {
     QuadTo(Vec2, Vec2),
     CurveTo(Vec2, Vec2, Vec2),
     Close
+}
+
+impl PathElement {
+    pub fn endpoint(&self) -> Option<Vec2> {
+        match self {
+            &PathElement::MoveTo(p) => Some(p),
+            &PathElement::LineTo(p) => Some(p),
+            &PathElement::QuadTo(_, p) => Some(p),
+            &PathElement::CurveTo(_, _, p) => Some(p),
+            PathElement::Close => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -19,11 +31,52 @@ impl Path {
         Path::default()
     }
 
+    pub fn len(&self) -> usize {
+        self.elements.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.elements.is_empty()
+    }
+
+    pub fn first(&self) -> Option<Vec2> {
+        match self.elements.first() {
+            Some(&PathElement::MoveTo(m)) => Some(m),
+            None => None,
+            _ => unreachable!()
+        }
+    }
+
+    pub fn last(&self) -> Option<&PathElement> {
+        self.elements.last()
+    }
+
     pub fn clear(&mut self) {
         self.elements.clear();
     }
 
-    pub fn push_cubic(&mut self, cubic: &Cubic) {
+    pub fn push_line(&mut self, line: Line) {
+        if self.elements.is_empty() {
+            self.elements.push(PathElement::MoveTo(line.p0));
+        } else {
+            self.elements.push(PathElement::LineTo(line.p0));
+        }
+        // if line.p0.x.is_nan() || line.p0.y.is_nan() || line.p1.x.is_nan() || line.p1.y.is_nan() {
+        //     println!("executed");
+        // }
+        self.elements.push(PathElement::LineTo(line.p1));
+    }
+
+    pub fn push_quad(&mut self, quad: Quadratic) {
+        if self.elements.is_empty() {
+            self.elements.push(PathElement::MoveTo(quad.p0));
+        } else {
+            self.elements.push(PathElement::LineTo(quad.p0));
+        }
+        self.elements.push(PathElement::QuadTo(quad.p1, quad.p2));
+    }
+
+    pub fn push_cubic(&mut self, cubic: Cubic) {
         if self.elements.is_empty() {
             self.elements.push(PathElement::MoveTo(cubic.p0));
         } else {
@@ -32,11 +85,32 @@ impl Path {
         self.elements.push(PathElement::CurveTo(cubic.p1, cubic.p2, cubic.p3));
     }
 
+    pub fn close(&mut self) {
+        if self.elements.is_empty() { return; }
+        self.elements.push(PathElement::Close);
+    }
+
     pub fn push(&mut self, element: PathElement) {
         if !matches!(element, PathElement::MoveTo(..)) && self.elements.is_empty() {
             panic!("push of non-MoveTo element into empty path");
         }
         self.elements.push(element);
+    }
+
+    pub fn extend(&mut self, elements: impl IntoIterator<Item = PathElement>) {
+        let mut elements = elements.into_iter();
+        if self.elements.is_empty() {
+            match elements.next() {
+                Some(m @ PathElement::MoveTo(..)) => self.elements.push(m),
+                Some(_) => panic!("push of non-MoveTo element into empty path (via extend)"),
+                None => return,
+            }
+        }
+        self.elements.extend(elements);
+    }
+
+    pub fn elements(&self) -> impl Iterator<Item = &PathElement> + DoubleEndedIterator {
+        self.elements.iter()
     }
 
     pub fn subpaths(&self) -> impl Iterator<Item = &[PathElement]> {
@@ -56,9 +130,10 @@ impl Path {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Line {
-    p0: Vec2,
-    p1: Vec2,
+    pub p0: Vec2,
+    pub p1: Vec2,
 }
 
 impl Line {
@@ -71,10 +146,11 @@ impl Line {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Quadratic {
-    p0: Vec2,
-    p1: Vec2,
-    p2: Vec2,
+    pub p0: Vec2,
+    pub p1: Vec2,
+    pub p2: Vec2,
 }
 
 impl Quadratic {
@@ -121,9 +197,16 @@ impl Quadratic {
         q0.flatten(points);
         q1.flatten(points);
     }
+
+    pub fn as_cubic(&self) -> Cubic {
+        const TWO_THIRDS: f32 = 2.0/3.0;
+        let c1 = self.p0 + (self.p1 - self.p0)*TWO_THIRDS;
+        let c2 = self.p2 - (self.p2 - self.p1)*TWO_THIRDS;
+        Cubic::new(self.p0, c1, c2, self.p2)
+    }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct Cubic {
     pub p0: Vec2,
     pub p1: Vec2,
@@ -217,6 +300,63 @@ impl Cubic {
     }
 }
 
+pub fn transform_path(src: &Path, transform: Affine) -> Path {
+    let mut dest = Path::new();
+    for element in src.elements() {
+        match element {
+            &PathElement::MoveTo(p0) =>
+                dest.push(PathElement::MoveTo(transform * p0)),
+            &PathElement::LineTo(p0) =>
+                dest.push(PathElement::LineTo(transform * p0)),
+            &PathElement::QuadTo(p0, p1) =>
+                dest.push(PathElement::QuadTo(transform * p0, transform * p1)),
+            &PathElement::CurveTo(p0, p1, p2) =>
+                dest.push(PathElement::CurveTo(transform * p0, transform * p1, transform * p2)),
+            PathElement::Close =>
+                dest.push(PathElement::Close)
+        }
+    }
+
+    dest
+}
+
+pub fn promote_path(src: &Path) -> Path {
+    let mut dest = Path::new();
+
+    for elements in src.subpaths() {
+        let Some(&PathElement::MoveTo(mut current_position)) = elements.first() else {
+            unreachable!();
+        };
+
+        for element in elements {
+            match element {
+                &PathElement::MoveTo(endpoint) => {
+                    dest.push(PathElement::MoveTo(endpoint));
+                    current_position = endpoint;
+                }
+                &PathElement::LineTo(endpoint) => {
+                    // TODO: promote lines into cubic beziers as well
+                    dest.push(PathElement::LineTo(endpoint));
+                    current_position = endpoint;
+                }
+                &PathElement::QuadTo(control, endpoint) => {
+                    let cubic = Quadratic::new(current_position, control, endpoint).as_cubic();
+                    dest.push(PathElement::CurveTo(cubic.p1, cubic.p2, cubic.p3));
+                    current_position = endpoint;
+                }
+                &PathElement::CurveTo(control1, control2, endpoint) => {
+                    dest.push(PathElement::CurveTo(control1, control2, endpoint));
+                    current_position = endpoint;
+                }
+                PathElement::Close =>
+                    dest.push(PathElement::Close)
+            }
+        }
+    }
+
+    dest
+}
+
 pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Color) {
     let mut points = vec![];
     let mut runs = vec![];
@@ -235,18 +375,21 @@ pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
         for element in subpath {
             match element {
                 &PathElement::LineTo(endpoint) => {
+                    if endpoint.is_nan() { panic!("nan found in LineTo"); }
                     let tendpoint = transform * endpoint;
                     points.push(current_position);
                     points.push(tendpoint);
                     current_position = tendpoint;
                 },
                 &PathElement::QuadTo(control_point, endpoint) => {
+                    if control_point.is_nan() || endpoint.is_nan() { panic!("nan found in QuadTo"); }
                     let tendpoint = transform * endpoint;
                     let quadratic = Quadratic::new(current_position, transform * control_point, tendpoint);
                     quadratic.flatten(&mut points);
                     current_position = tendpoint;
                 },
                 &PathElement::CurveTo(control1, control2, endpoint) => {
+                    if control1.is_nan() || control1.is_nan() || endpoint.is_nan() { panic!("nan found in CurveTo"); }
                     let tendpoint = transform * endpoint;
                     let cubic = Cubic::new(current_position, transform * control1, transform * control2, tendpoint);
                     cubic.flatten(&mut points);
@@ -264,6 +407,12 @@ pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
     }
 
     primitives::polygon(canvas, &points, &runs, color);
+}
+
+pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform: Affine, color: Color) {
+    
+    let stroked = stroke::expand_stroke(&transform_path(path, transform), stroke);
+    fill_path(canvas, &stroked, Affine::IDENTITY, color);
 }
 
 pub fn draw_path_hairline(canvas: &mut Canvas, path: &Path, transform: Affine, color: Color) {

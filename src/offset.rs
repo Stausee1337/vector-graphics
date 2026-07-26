@@ -42,7 +42,7 @@ struct OffsetCubic {
 impl OffsetCubic {
     fn eval_curve_and_derivative(cubic: &Cubic, offset: f32, t: f32) -> (Vec2, Vec2) {
         let derivative = cubic.derivative().evaluate(t);
-        let point = cubic.evaluate(t) + Vec2::new(derivative.y, -derivative.x).norm() * offset;
+        let point = cubic.evaluate(t) - derivative.turn90().norm() * offset;
         let deriv = derivative * (1.0 + offset * cubic.curvature(t));
         (point, deriv)
     }
@@ -246,7 +246,7 @@ impl<'a> Approx<'a> {
     fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
         let (t_subdiv, max_err) = self.get_max_error(&oc);
         if max_err <= 0.25 || level >= Self::MAX_SUBDIV {
-            self.dest.push_cubic(&oc.approx);
+            self.dest.push_cubic(oc.approx);
             return;
         }
         let (oc1, oc2) = oc.split(t_subdiv);
@@ -262,6 +262,12 @@ impl<'a> Approx<'a> {
     }
 }
 
-pub fn get_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) {
+pub fn compute_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) {
+    // There's a lot of things one can do:
+    //  - If "least squres based approaches" are so popular, don't they also need a thing to
+    //  approximate against? Aka, the hermite spline in our case.
+    //  - Will quality improve just by detecting and splitting at cusps?
+    //  - Read more papers, get more ideas, try out more stuff
     Approx::approx(dest, cubic, offset)
 }
+

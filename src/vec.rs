@@ -1,6 +1,6 @@
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Vec2 {
     pub x: f32,
     pub y: f32,
@@ -25,6 +25,14 @@ impl Vec2 {
 
     pub fn norm(self) -> Vec2 {
         self/self.length()
+    }
+
+    pub fn turn90(self) -> Vec2 {
+        Vec2 { x: -self.y, y: self.x }
+    }
+
+    pub fn is_nan(self) -> bool {
+        self.x.is_nan() || self.y.is_nan()
     }
 }
 
