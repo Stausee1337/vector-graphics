@@ -18,11 +18,11 @@ impl<'a> Canvas<'a> {
         }
     }
 
-    pub fn clear(&mut self) {
+    pub fn clear(&mut self, color: Color) {
         let (_, height, stride) = (self.width as usize, self.height as usize, self.stride as usize);
         for y in 0..height {
             let line = &mut self.pixels[y * stride..(y + 1)*stride];
-            line.fill(0);
+            line.fill(color.as_u32());
         }
     }
 

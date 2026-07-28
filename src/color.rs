@@ -62,6 +62,7 @@ pub mod colors {
 
     pub const WHITE: Color = Color::new(0xffffffff);
     pub const GRAY : Color = Color::new(0xff7f7f7f);
+    pub const BLACK: Color = Color::new(0xff000000);
     pub const RED  : Color = Color::new(0xffff0000);
     pub const LIME : Color = Color::new(0xff00ff00);
     pub const AQUA : Color = Color::new(0xff00ffff);
