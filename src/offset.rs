@@ -1,4 +1,4 @@
-use crate::{path::{Cubic, Path}, vec::Vec2};
+use crate::{path::{Cubic, Line, Path}, vec::Vec2};
 
 
 struct Hermite {
@@ -40,16 +40,20 @@ struct OffsetCubic {
 }
 
 impl OffsetCubic {
-    fn eval_curve_and_derivative(cubic: &Cubic, offset: f32, t: f32) -> (Vec2, Vec2) {
+    fn eval_curve_and_derivative(cubic: &Cubic, offset: f32, t: f32) -> Option<(Vec2, Vec2)> {
         let derivative = cubic.derivative().evaluate(t);
+        if derivative.length_squared() < 1e-6 {
+            return None;
+        }
         let point = cubic.evaluate(t) - derivative.turn90().norm() * offset;
         let deriv = derivative * (1.0 + offset * cubic.curvature(t));
-        (point, deriv)
+        Some((point, deriv))
     }
 
-    fn form_cubic_and_offset(cubic: Cubic, offset: f32) -> Self {
-        let (p0, v0) = Self::eval_curve_and_derivative(&cubic, offset, 0.0);
-        let (p1, v1) = Self::eval_curve_and_derivative(&cubic, offset, 1.0);
+    fn form_cubic_and_offset(cubic: Cubic, offset: f32) -> Option<Self> {
+        // TODO: Potentially do more on numerical hardening instead of exiting out
+        let (p0, v0) = Self::eval_curve_and_derivative(&cubic, offset, 0.0)?;
+        let (p1, v1) = Self::eval_curve_and_derivative(&cubic, offset, 1.0)?;
 
         let hermite = Hermite { p0, p1, v0, v1 };
 
@@ -72,7 +76,7 @@ impl OffsetCubic {
             x2*x3 + y2*y3,
             x3.sq() + y3.sq(),
         ];
-    
+ 
         let deriv1_coeffs = [
             coeffs[1] - coeffs[0],
             coeffs[2] - coeffs[1],
@@ -91,7 +95,14 @@ impl OffsetCubic {
         ];
 
 
-        Self { orig: cubic, approx: hermite.as_cubic(), offset, coeffs, deriv1_coeffs, deriv2_coeffs }
+        Some(Self {
+            orig: cubic,
+            approx: hermite.as_cubic(),
+            offset,
+            coeffs,
+            deriv1_coeffs,
+            deriv2_coeffs
+        })
     }
 
     fn eval(&self, t: f32) -> f32 {
@@ -218,14 +229,14 @@ impl OffsetCubic {
         }
     }
 
-    fn split(&self, t_subdiv: f32) -> (OffsetCubic, OffsetCubic) {
+    fn split(&self, t_subdiv: f32) -> Option<(OffsetCubic, OffsetCubic)> {
         let (cubic1, cubic2) = self.orig.split_at(t_subdiv);
         // let cubic1 = self.orig.subsegment(0.0, t_subdiv);
         // let cubic2 = self.orig.subsegment(t_subdiv, 1.0);
         // TODO: can probably be optimized by the information we already have
-        let oc1 = Self::form_cubic_and_offset(cubic1, self.offset);
-        let oc2 = Self::form_cubic_and_offset(cubic2, self.offset);
-        (oc1, oc2)
+        let oc1 = Self::form_cubic_and_offset(cubic1, self.offset)?;
+        let oc2 = Self::form_cubic_and_offset(cubic2, self.offset)?;
+        Some((oc1, oc2))
     }
 }
 
@@ -237,7 +248,10 @@ impl<'a> Approx<'a> {
     const MAX_SUBDIV: usize = 10;
 
     fn approx(dest: &'a mut Path, source: Cubic, offset: f32) {
-        let oc = OffsetCubic::form_cubic_and_offset(source, offset);
+        let Some(oc) = OffsetCubic::form_cubic_and_offset(source, offset) else {
+            dest.push_line(Line::new(source.p0, source.p3));
+            return;
+        };
         let mut approx = Approx { dest };
 
         approx.make_offset_recursively(oc, 0);
@@ -249,7 +263,10 @@ impl<'a> Approx<'a> {
             self.dest.push_cubic(oc.approx);
             return;
         }
-        let (oc1, oc2) = oc.split(t_subdiv);
+        let Some((oc1, oc2)) = oc.split(t_subdiv) else {
+            self.dest.push_cubic(oc.approx);
+            return;
+        };
         self.make_offset_recursively(oc1, level + 1);
         self.make_offset_recursively(oc2, level + 1);
     }

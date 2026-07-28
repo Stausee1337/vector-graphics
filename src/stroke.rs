@@ -167,6 +167,14 @@ impl Stroker {
     }
 
     fn do_cubic(&mut self, cubic: Cubic) {
+        let chord = cubic.p3 - cubic.p0;
+
+        const EPSILON: f32 = 1e-6;
+        if chord.cross(cubic.p1 - cubic.p0).abs() < EPSILON && chord.cross(cubic.p2 - cubic.p0).abs() < EPSILON {
+            self.do_line(Line::new(cubic.p0, cubic.p1));
+            return;
+        }
+
         offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5);
         self.do_join(JoinDestination::Forward);
         offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5);
