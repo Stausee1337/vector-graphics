@@ -39,7 +39,25 @@ impl Path {
         self.elements.is_empty()
     }
 
-    pub fn first(&self) -> Option<Vec2> {
+    /// Returns the first non-[`PathElement::MoveTo`] [`PathElement`] if it exists, [`None`]
+    /// otherwise.
+    pub fn first_element(&self) -> Option<&PathElement> {
+        for element in self.elements() {
+            if let PathElement::MoveTo(..) = element {
+                return Some(element);
+            }
+        }
+        None
+    }
+
+    /// Retruns the last [`PathElement`] if it exists, [`None`] otherwise.
+    pub fn last_element(&self) -> Option<&PathElement> {
+        self.elements.last()
+    }
+
+    /// Returns the first point in the [`Path`] (equivalent to the [`Path::startpoint`]) as a 
+    /// [`Vec2`] if it exists, [`None`] otherwise.
+    pub fn first_point(&self) -> Option<Vec2> {
         match self.elements.first() {
             Some(&PathElement::MoveTo(m)) => Some(m),
             None => None,
@@ -47,8 +65,44 @@ impl Path {
         }
     }
 
-    pub fn last(&self) -> Option<&PathElement> {
-        self.elements.last()
+    /// Returns the last point in the [`Path`] as a [`Vec2`] if it exists, [`None`] otherwise.
+    ///
+    /// NOTE: this is not equivalent to the paths endpoint, since this function does not consider 
+    /// [`PathElement::Close`]. For the endpoint use use [`Path::endpoint`] for that.
+    pub fn last_point(&self) -> Option<Vec2> {
+        for element in self.elements().rev() {
+            if let Some(point) = element.endpoint() {
+                return Some(point);
+            }
+        }
+        None
+    }
+
+    /// Returns the point the [`Path`] starts at (equivalent to [`Path::first_point`]) as a [`Vec2`] 
+    /// if it exists, [`None`] otherwise
+    pub fn startpoint(&self) -> Option<Vec2> {
+        self.first_point()
+    }
+
+    /// Returns the point the [`Path`] ends at as a [`Vec2`] if it exists, [`None`] otherwise.
+    pub fn endpoint(&self) -> Option<Vec2> {
+        use PathElement::{MoveTo, LineTo, QuadTo, CurveTo, Close};
+
+        let mut elements = self.elements().rev();
+        while let Some(element) = elements.next() {
+            match element {
+                &(MoveTo(p) | LineTo(p) | QuadTo(_, p) | CurveTo(_, _, p)) => return Some(p),
+                Close => break,
+            }
+        }
+
+        while let Some(element) = elements.next() {
+            if let &MoveTo(p) = element {
+                return Some(p);
+            }
+        }
+
+        None
     }
 
     pub fn clear(&mut self) {
@@ -61,9 +115,9 @@ impl Path {
         } else {
             self.elements.push(PathElement::LineTo(line.p0));
         }
-        // if line.p0.x.is_nan() || line.p0.y.is_nan() || line.p1.x.is_nan() || line.p1.y.is_nan() {
-        //     println!("executed");
-        // }
+        if line.p0.is_nan() || line.p1.is_nan() {
+            eprintln!("push_line with nan point found");
+        }
         self.elements.push(PathElement::LineTo(line.p1));
     }
 
@@ -73,6 +127,9 @@ impl Path {
         } else {
             self.elements.push(PathElement::LineTo(quad.p0));
         }
+        if quad.p0.is_nan() || quad.p1.is_nan() || quad.p2.is_nan() {
+            eprintln!("push_quad with nan point found");
+        }
         self.elements.push(PathElement::QuadTo(quad.p1, quad.p2));
     }
 
@@ -81,6 +138,9 @@ impl Path {
             self.elements.push(PathElement::MoveTo(cubic.p0));
         } else {
             self.elements.push(PathElement::LineTo(cubic.p0));
+        }
+        if cubic.p0.is_nan() || cubic.p1.is_nan() || cubic.p2.is_nan() || cubic.p3.is_nan() {
+            eprintln!("push_cubic with nan point found");
         }
         self.elements.push(PathElement::CurveTo(cubic.p1, cubic.p2, cubic.p3));
     }
@@ -206,7 +266,7 @@ impl Quadratic {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Cubic {
     pub p0: Vec2,
     pub p1: Vec2,

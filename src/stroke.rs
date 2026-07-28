@@ -61,7 +61,7 @@ pub struct Stroker {
     backward: Path,
 }
 
-enum JoinDestination {
+enum DestPath {
     Forward, Backward
 }
 
@@ -104,9 +104,13 @@ impl Stroker {
             return;
         }
 
-        // TODO: making a (simple) line cap works by doing the same thing we do in `do_join`: we
-        // emit a line segment for into the forward and backward path, closing the path along the
-        // outer and inner perimiter with a a simple line.
+        {
+            let start = self.forward.startpoint().unwrap();
+            self.forward.push(PathElement::LineTo(start));
+
+            let start = self.backward.startpoint().unwrap();
+            self.backward.push(PathElement::LineTo(start));
+        }
 
         self.output.extend(self.forward.elements().copied());
 
@@ -134,20 +138,20 @@ impl Stroker {
         self.backward.clear();
     }
 
-    fn do_join(&mut self, dest: JoinDestination) {
+    fn do_join(&mut self, dest: DestPath) {
         if self.working.is_empty() { return; }
 
         let path = match dest {
-            JoinDestination::Forward => &mut self.forward,
-            JoinDestination::Backward => &mut self.backward,
+            DestPath::Forward => &mut self.forward,
+            DestPath::Backward => &mut self.backward,
         };
         let mut elements = self.working.elements().copied();
-        if let Some(last_element) = path.last() {
-            let last_point = last_element.endpoint().unwrap();
+        if !path.is_empty() {
+            // let last_point = last_element.endpoint().unwrap();
             let Some(PathElement::MoveTo(next_point)) = elements.next() else {
                 unreachable!();
             };
-            path.push_line(Line::new(last_point, next_point));
+            path.push(PathElement::LineTo(next_point));
         }
         path.extend(elements);
         self.working.clear();
@@ -161,9 +165,9 @@ impl Stroker {
         let forward = make_offset_line(&line, -self.stroke.width * 0.5);
         let backward = make_offset_line(&line, self.stroke.width * 0.5);
         self.working.push_line(forward);
-        self.do_join(JoinDestination::Forward);
+        self.do_join(DestPath::Forward);
         self.working.push_line(backward);
-        self.do_join(JoinDestination::Backward);
+        self.do_join(DestPath::Backward);
     }
 
     fn do_cubic(&mut self, cubic: Cubic) {
@@ -176,9 +180,9 @@ impl Stroker {
         }
 
         offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5);
-        self.do_join(JoinDestination::Forward);
+        self.do_join(DestPath::Forward);
         offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5);
-        self.do_join(JoinDestination::Backward);
+        self.do_join(DestPath::Backward);
     }
 }
 

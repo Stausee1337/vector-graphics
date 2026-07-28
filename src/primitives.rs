@@ -4,6 +4,9 @@ use crate::{canvas::Canvas, color::Color, vec::Vec2};
 
 
 pub fn circle(canvas: &mut Canvas, center: Vec2, radius: f32, color: Color) {
+    // maybe approximate into line segements and draw with scanline rasterization
+    // dphi = 2 * arccos(1 - epsilon/R)
+    // segments = angle/dphi
     let y0 = (center.y - radius) as i32;
     let x0 = (center.x - radius) as i32;
 
@@ -138,9 +141,9 @@ pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], co
     }
 
     edges.sort_by(|a, b| match b.y_min.partial_cmp(&a.y_min) {
-        Some(Ordering::Equal) => b.x_hit.partial_cmp(&a.x_hit).unwrap_or(Ordering::Equal),
+        Some(Ordering::Equal) => b.x_hit.partial_cmp(&a.x_hit).unwrap(),
         Some(other) => other,
-        None => Ordering::Greater
+        None => panic!("{}, {}", a.y_min, b.y_min)
     });
 
     let mut scanline = vec![0u8; canvas.width as usize];
