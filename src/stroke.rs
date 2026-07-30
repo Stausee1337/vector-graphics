@@ -174,7 +174,7 @@ impl Stroker {
             return;
         }
 
-        let normal = -tangent_next.turn90();
+        let normal = tangent_next.turn90();
         let fw_next = self.current_pos - normal * self.stroke.width * 0.5;
         let bw_next = self.current_pos + normal * self.stroke.width * 0.5;
 
@@ -258,7 +258,7 @@ fn make_offset_line(line: &Line, offset: f32) -> Line {
     // L'(t) = (B - A)
     // L_d(t) = L(t) + d*N(t), where N(t) = (y'(t), -x'(t))/|L'(t)|
     // N(t) = (yb - ya, xa - xb).norm()
-    let offset_vec = -(line.p1 - line.p0).turn90().norm() * offset;
+    let offset_vec = (line.p1 - line.p0).turn90().norm() * offset;
     let p0 = line.p0 + offset_vec;
     let p1 = line.p1 + offset_vec;
     Line::new(p0, p1)

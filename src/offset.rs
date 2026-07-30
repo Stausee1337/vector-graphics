@@ -45,8 +45,8 @@ impl OffsetCubic {
         if derivative.length_squared() < 1e-6 {
             return None;
         }
-        let point = cubic.evaluate(t) - derivative.turn90().norm() * offset;
-        let deriv = derivative * (1.0 + offset * cubic.curvature(t));
+        let point = cubic.evaluate(t) + derivative.turn90().norm() * offset;
+        let deriv = derivative * (1.0 - offset * cubic.curvature(t));
         Some((point, deriv))
     }
 
