@@ -184,12 +184,44 @@ impl Stroker {
             return;
         };
 
+        let ab = tangent_prev;
+        let cd = tangent_next;
+        let cross = ab.cross(cd);
+        let dot = ab.dot(cd);
+        let hypot = cross.hypot(dot);
+
+        let join_threshold = 0.5 / self.stroke.width;
+        if dot > 0.0 && cross.abs() < hypot * join_threshold {
+            return;
+        }
+
         match self.stroke.join {
             Join::Bevel => {
                 self.forward.push(PathElement::LineTo(fw_next));
                 self.backward.push(PathElement::LineTo(bw_next));
             }
-            Join::Miter { miter_limit } => todo!(), 
+            Join::Miter { miter_limit } => {
+                if dot.abs() <= 1.0 - 2. / (miter_limit * miter_limit) {
+                    if cross > 0.0 {
+                        let fp_last = fw_prev;
+                        let fp_this = fw_next;
+                        let h = ab.cross(fp_this - fp_last) / cross;
+                        let miter_pt = fp_this - cd * h;
+                        self.forward.line_to(miter_pt);
+                        self.backward.line_to(self.current_pos);
+                    } else if cross < 0.0 {
+                        let fp_last = bw_prev;
+                        let fp_this = bw_next;
+                        let h = ab.cross(fp_this - fp_last) / cross;
+                        let miter_pt = fp_this - cd * h;
+                        self.backward.line_to(miter_pt);
+                        self.forward.line_to(self.current_pos);
+                    }
+                }
+
+                self.forward.push(PathElement::LineTo(fw_next));
+                self.backward.push(PathElement::LineTo(bw_next));
+            }
             Join::Round => todo!()
         }
     }
@@ -224,7 +256,7 @@ impl Stroker {
         self.backward.extend(self.working.elements().skip(1).copied());
 
         self.current_pos = cubic.p3;
-        self.current_tangent = (cubic.p2 - cubic.p3).norm();
+        self.current_tangent = (cubic.p3 - cubic.p2).norm();
     }
 }
 

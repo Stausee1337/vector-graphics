@@ -4,15 +4,15 @@ use skrifa::{FontRef, MetadataProvider, instance::Location, outline::{DrawSettin
 use winit::{event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent}, event_loop::EventLoop, window::Window};
 
 use vector_graphics::{
-    affine::Affine, canvas::Canvas, color::{Color, colors}, path::{Path, PathElement, fill_path, stroke_path}, stroke::Stroke, vec::Vec2
+    affine::Affine, canvas::Canvas, color::{Color, colors}, path::{Path, PathElement, fill_path, stroke_path}, stroke::{Join, Stroke}, vec::Vec2
 };
 
 mod app;
 
-// const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
+const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
 // const INTER_REGULAR: &'static [u8] = include_bytes!("../Inter/Inter_18pt-Regular.ttf");
 // const DEJAVU_SANS: &'static [u8] = include_bytes!("../DejaVuSans.ttf");
-const COMIC_MS: &'static [u8] = include_bytes!("../ComicMono.ttf");
+// const COMIC_MS: &'static [u8] = include_bytes!("../ComicMono.ttf");
 
 fn intersects_circle(point: Vec2, center: Vec2, radius: f32) -> bool {
     return (center.x - point.x).abs() <= radius && (center.y - point.y).abs() <= radius;
@@ -69,7 +69,7 @@ fn draw_glyph_sheet(canvas: &mut Canvas, font: &FontRef, transform: Affine) {
     let mut path = Path::new();
     let mut width = 0.0;
 
-    let stroke = Stroke { width: 2.5 };
+    let stroke = Stroke { width: 10.0, join: Join::Miter { miter_limit: 4.0 } };
 
     for line in CHAR_SHEET {
         for char in line.chars() {
@@ -108,7 +108,7 @@ fn draw_glyph_sheet(canvas: &mut Canvas, font: &FontRef, transform: Affine) {
 const SHEET_SCALE: f32 = 0.1;
 
 fn main() {
-    let font = FontRef::new(COMIC_MS).unwrap();
+    let font = FontRef::new(JBM_REGULAR).unwrap();
 
     let event_loop = EventLoop::new().unwrap();
     let context = softbuffer::Context::new(event_loop.owned_display_handle()).unwrap();
