@@ -1,9 +1,19 @@
 
 use crate::{offset, path::{Cubic, Line, Path, PathElement, Quadratic}, vec::Vec2};
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
+pub enum Join {
+    Bevel,
+    Miter {
+        miter_limit: f32
+    },
+    Round,
+}
+
+#[derive(Clone, Copy)]
 pub struct Stroke {
-    pub width: f32
+    pub width: f32,
+    pub join: Join
 }
 
 pub fn expand_stroke(path: &Path, stroke: &Stroke) -> Path {
@@ -19,30 +29,41 @@ pub fn expand_stroke(path: &Path, stroke: &Stroke) -> Path {
     };
     
     let mut current_position = start_position;
+    stroker.current_pos = current_position;
     for element in elements {
         match element {
             &PathElement::MoveTo(position) => {
                 start_position = position;
                 current_position = position;
                 stroker.finish();
+                stroker.current_pos = current_position;
             },
             &PathElement::LineTo(endpoint) => {
+                let tangent = endpoint - current_position;
+                stroker.do_join(tangent);
                 stroker.do_line(Line::new(current_position, endpoint));
                 current_position = endpoint;
             },
             &PathElement::QuadTo(control, endpoint) => {
                 let quad = Quadratic::new(current_position, control, endpoint);
+                let tangent = control - current_position;
+                stroker.do_join(tangent);
                 stroker.do_cubic(quad.as_cubic());
                 current_position = endpoint;
             },
             &PathElement::CurveTo(control1, control2, endpoint) => {
-                stroker.do_cubic(Cubic::new(current_position, control1, control2, endpoint));
+                let cubic = Cubic::new(current_position, control1, control2, endpoint);
+                let tangent = control1 - current_position;
+                stroker.do_join(tangent);
+                stroker.do_cubic(cubic);
                 current_position = endpoint;
             }
             PathElement::Close => {
+                let tangent = start_position - current_position;
+                stroker.do_join(tangent);
                 stroker.do_line(Line::new(current_position, start_position));
                 current_position = start_position;
-                stroker.finish();
+                stroker.finish_closed();
             },
         }
     }
@@ -59,25 +80,26 @@ pub struct Stroker {
     working: Path,
     forward: Path,
     backward: Path,
-}
-
-enum DestPath {
-    Forward, Backward
+    current_pos: Vec2,
+    current_tangent: Vec2,
 }
 
 enum IncompleteConstructor {
+    MoveTo,
     LineTo,
-    // QuadTo(Vec2),
+    QuadTo(Vec2),
     CurveTo(Vec2, Vec2)
 }
 
 impl IncompleteConstructor {
     fn complete_with_endpoint(self, dest: &mut Path, endpoint: Vec2) {
         match self {
+            IncompleteConstructor::MoveTo =>
+                dest.push(PathElement::MoveTo(endpoint)),
             IncompleteConstructor::LineTo =>
                 dest.push(PathElement::LineTo(endpoint)),
-            // IncompleteConstructor::QuadTo(control) =>
-            //     dest.push(PathElement::QuadTo(control, endpoint)),
+            IncompleteConstructor::QuadTo(control) =>
+                dest.push(PathElement::QuadTo(control, endpoint)),
             IncompleteConstructor::CurveTo(control1, control2) =>
                 dest.push(PathElement::CurveTo(control1, control2, endpoint)),
         }
@@ -91,7 +113,9 @@ impl Stroker {
             output: Path::new(),
             working: Path::new(),
             forward: Path::new(),
-            backward: Path::new()
+            backward: Path::new(),
+            current_pos: Vec2::new(0.0, 0.0),
+            current_tangent: Vec2::new(0.0, 0.0),
         }
     }
 
@@ -110,51 +134,64 @@ impl Stroker {
 
             let start = self.backward.startpoint().unwrap();
             self.backward.push(PathElement::LineTo(start));
+            // self.do_join(tangent_next);
         }
 
         self.output.extend(self.forward.elements().copied());
-
-        let mut incomplete_constructor = IncompleteConstructor::LineTo;
-        for element in self.backward.elements().rev() {
-            match element {
-                &PathElement::LineTo(endpoint) => {
-                    let prev = std::mem::replace(&mut incomplete_constructor, IncompleteConstructor::LineTo);
-                    prev.complete_with_endpoint(&mut self.output, endpoint);
-                }
-                &PathElement::CurveTo(control1, control2, endpoint) => {
-                    let prev = std::mem::replace(&mut incomplete_constructor, IncompleteConstructor::CurveTo(control2, control1));
-                    prev.complete_with_endpoint(&mut self.output, endpoint);
-                },
-                &PathElement::MoveTo(endpoint) => {
-                    incomplete_constructor.complete_with_endpoint(&mut self.output, endpoint);
-                    break;
-                },
-                PathElement::QuadTo(..) | PathElement::Close => unreachable!()
-            }
-        }
+        extend_reversed(&mut self.output, &self.backward);
 
         self.output.close();
         self.forward.clear();
         self.backward.clear();
     }
 
-    fn do_join(&mut self, dest: DestPath) {
-        if self.working.is_empty() { return; }
-
-        let path = match dest {
-            DestPath::Forward => &mut self.forward,
-            DestPath::Backward => &mut self.backward,
-        };
-        let mut elements = self.working.elements().copied();
-        if !path.is_empty() {
-            // let last_point = last_element.endpoint().unwrap();
-            let Some(PathElement::MoveTo(next_point)) = elements.next() else {
-                unreachable!();
-            };
-            path.push(PathElement::LineTo(next_point));
+    fn finish_closed(&mut self) {
+        if self.forward.is_empty() || self.backward.is_empty() {
+            return;
         }
-        path.extend(elements);
-        self.working.clear();
+
+        self.forward.close();
+
+        self.output.extend(self.forward.elements().copied());
+        extend_reversed(&mut self.output, &self.backward);
+        self.output.close();
+
+        self.forward.clear();
+        self.backward.clear();
+    }
+
+    fn do_join(&mut self, mut tangent_next: Vec2) {
+
+        if tangent_next.length_squared() <= 1e-6 {
+            eprintln!("extremely small tangent");
+            return;
+        }
+        tangent_next = tangent_next.norm();
+        let tangent_prev = self.current_tangent;
+
+        if tangent_prev.is_nan() {
+            eprintln!("current tangent is nan");
+            return;
+        }
+
+        let normal = -tangent_next.turn90();
+        let fw_next = self.current_pos - normal * self.stroke.width * 0.5;
+        let bw_next = self.current_pos + normal * self.stroke.width * 0.5;
+
+        let (Some(fw_prev), Some(bw_prev)) = (self.forward.endpoint(), self.backward.endpoint()) else {
+            self.forward.move_to(fw_next);
+            self.backward.move_to(bw_next);
+            return;
+        };
+
+        match self.stroke.join {
+            Join::Bevel => {
+                self.forward.push(PathElement::LineTo(fw_next));
+                self.backward.push(PathElement::LineTo(bw_next));
+            }
+            Join::Miter { miter_limit } => todo!(), 
+            Join::Round => todo!()
+        }
     }
 
     fn do_line(&mut self, line: Line) {
@@ -164,10 +201,10 @@ impl Stroker {
         }
         let forward = make_offset_line(&line, -self.stroke.width * 0.5);
         let backward = make_offset_line(&line, self.stroke.width * 0.5);
-        self.working.push_line(forward);
-        self.do_join(DestPath::Forward);
-        self.working.push_line(backward);
-        self.do_join(DestPath::Backward);
+        self.forward.line_to(forward.p1);
+        self.backward.line_to(backward.p1);
+        self.current_pos = line.p1;
+        self.current_tangent = (line.p1 - line.p0).norm();
     }
 
     fn do_cubic(&mut self, cubic: Cubic) {
@@ -179,10 +216,40 @@ impl Stroker {
             return;
         }
 
+        self.working.clear();
         offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5);
-        self.do_join(DestPath::Forward);
+        self.forward.extend(self.working.elements().skip(1).copied());
+        self.working.clear();
         offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5);
-        self.do_join(DestPath::Backward);
+        self.backward.extend(self.working.elements().skip(1).copied());
+
+        self.current_pos = cubic.p3;
+        self.current_tangent = (cubic.p2 - cubic.p3).norm();
+    }
+}
+
+fn extend_reversed(dest: &mut Path, src: &Path) {
+    let mut incomplete_constructor = IncompleteConstructor::MoveTo;
+    for element in src.elements().rev() {
+        match element {
+            &PathElement::LineTo(endpoint) => {
+                let prev = std::mem::replace(&mut incomplete_constructor, IncompleteConstructor::LineTo);
+                prev.complete_with_endpoint(dest, endpoint);
+            }
+            &PathElement::QuadTo(control, endpoint) => {
+                let prev = std::mem::replace(&mut incomplete_constructor, IncompleteConstructor::QuadTo(control));
+                prev.complete_with_endpoint(dest, endpoint);
+            }
+            &PathElement::CurveTo(control1, control2, endpoint) => {
+                let prev = std::mem::replace(&mut incomplete_constructor, IncompleteConstructor::CurveTo(control2, control1));
+                prev.complete_with_endpoint(dest, endpoint);
+            },
+            &PathElement::MoveTo(endpoint) => {
+                incomplete_constructor.complete_with_endpoint(dest, endpoint);
+                break;
+            },
+            PathElement::Close => unreachable!()
+        }
     }
 }
 

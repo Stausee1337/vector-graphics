@@ -249,9 +249,12 @@ impl<'a> Approx<'a> {
 
     fn approx(dest: &'a mut Path, source: Cubic, offset: f32) {
         let Some(oc) = OffsetCubic::form_cubic_and_offset(source, offset) else {
-            dest.push_line(Line::new(source.p0, source.p3));
+            // FIXME: really ugly bail out
+            dest.move_to(source.p0);
+            dest.line_to(source.p1);
             return;
         };
+        dest.move_to(oc.approx.p0);
         let mut approx = Approx { dest };
 
         approx.make_offset_recursively(oc, 0);
@@ -259,12 +262,13 @@ impl<'a> Approx<'a> {
 
     fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
         let (t_subdiv, max_err) = self.get_max_error(&oc);
+        let approx = &oc.approx;
         if max_err <= 0.25 || level >= Self::MAX_SUBDIV {
-            self.dest.push_cubic(oc.approx);
+            self.dest.curve_to(approx.p1, approx.p2, approx.p3);
             return;
         }
         let Some((oc1, oc2)) = oc.split(t_subdiv) else {
-            self.dest.push_cubic(oc.approx);
+            self.dest.curve_to(approx.p1, approx.p2, approx.p3);
             return;
         };
         self.make_offset_recursively(oc1, level + 1);
@@ -280,11 +284,8 @@ impl<'a> Approx<'a> {
 }
 
 pub fn compute_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) {
-    // There's a lot of things one can do:
-    //  - If "least squres based approaches" are so popular, don't they also need a thing to
-    //  approximate against? Aka, the hermite spline in our case.
-    //  - Will quality improve just by detecting and splitting at cusps?
-    //  - Read more papers, get more ideas, try out more stuff
+    // Numberical robustness is hard, and since this is only for reasarch I suppose this approach
+    // is fine
     Approx::approx(dest, cubic, offset)
 }
 

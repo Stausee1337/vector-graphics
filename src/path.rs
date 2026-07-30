@@ -1,6 +1,9 @@
+use core::fmt;
+use std::fmt::Write;
+
 use crate::{affine::Affine, canvas::Canvas, color::Color, primitives, stroke::{self, Stroke}, vec::Vec2};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum PathElement {
     MoveTo(Vec2),
     LineTo(Vec2),
@@ -109,64 +112,45 @@ impl Path {
         self.elements.clear();
     }
 
-    pub fn push_line(&mut self, line: Line) {
-        if self.elements.is_empty() {
-            self.elements.push(PathElement::MoveTo(line.p0));
-        } else {
-            self.elements.push(PathElement::LineTo(line.p0));
+    pub fn push(&mut self, element: PathElement) {
+        if !matches!(element, PathElement::MoveTo(..)) && self.is_empty() {
+            panic!("push of non-MoveTo element into empty path");
         }
-        if line.p0.is_nan() || line.p1.is_nan() {
-            eprintln!("push_line with nan point found");
-        }
-        self.elements.push(PathElement::LineTo(line.p1));
+        check_nan(element);
+        self.elements.push(element);
     }
 
-    pub fn push_quad(&mut self, quad: Quadratic) {
-        if self.elements.is_empty() {
-            self.elements.push(PathElement::MoveTo(quad.p0));
-        } else {
-            self.elements.push(PathElement::LineTo(quad.p0));
-        }
-        if quad.p0.is_nan() || quad.p1.is_nan() || quad.p2.is_nan() {
-            eprintln!("push_quad with nan point found");
-        }
-        self.elements.push(PathElement::QuadTo(quad.p1, quad.p2));
+    pub fn move_to(&mut self, dest: Vec2) {
+        self.push(PathElement::MoveTo(dest));
     }
 
-    pub fn push_cubic(&mut self, cubic: Cubic) {
-        if self.elements.is_empty() {
-            self.elements.push(PathElement::MoveTo(cubic.p0));
-        } else {
-            self.elements.push(PathElement::LineTo(cubic.p0));
-        }
-        if cubic.p0.is_nan() || cubic.p1.is_nan() || cubic.p2.is_nan() || cubic.p3.is_nan() {
-            eprintln!("push_cubic with nan point found");
-        }
-        self.elements.push(PathElement::CurveTo(cubic.p1, cubic.p2, cubic.p3));
+    pub fn line_to(&mut self, dest: Vec2) {
+        self.push(PathElement::LineTo(dest));
+    }
+
+    pub fn quad_to(&mut self, control: Vec2, dest: Vec2) {
+        self.push(PathElement::QuadTo(control, dest));
+    }
+
+    pub fn curve_to(&mut self, control1: Vec2, control2: Vec2, dest: Vec2) {
+        self.push(PathElement::CurveTo(control1, control2, dest));
     }
 
     pub fn close(&mut self) {
-        if self.elements.is_empty() { return; }
-        self.elements.push(PathElement::Close);
-    }
-
-    pub fn push(&mut self, element: PathElement) {
-        if !matches!(element, PathElement::MoveTo(..)) && self.elements.is_empty() {
-            panic!("push of non-MoveTo element into empty path");
-        }
-        self.elements.push(element);
+        if self.is_empty() { return; }
+        self.push(PathElement::Close);
     }
 
     pub fn extend(&mut self, elements: impl IntoIterator<Item = PathElement>) {
         let mut elements = elements.into_iter();
-        if self.elements.is_empty() {
+        if self.is_empty() {
             match elements.next() {
-                Some(m @ PathElement::MoveTo(..)) => self.elements.push(m),
+                Some(m @ PathElement::MoveTo(..)) => self.push(m),
                 Some(_) => panic!("push of non-MoveTo element into empty path (via extend)"),
                 None => return,
             }
         }
-        self.elements.extend(elements);
+        self.elements.extend(elements.map(|x| { check_nan(x);  x}));
     }
 
     pub fn elements(&self) -> impl Iterator<Item = &PathElement> + DoubleEndedIterator {
@@ -188,6 +172,35 @@ impl Path {
             Some(&self.elements[start..i])
         })
     }
+
+    pub fn as_svg(&self, out: &mut dyn fmt::Write) -> fmt::Result {
+        for (idx, element) in self.elements().enumerate() {
+            if idx > 0 {
+                out.write_char(' ')?;
+            }
+            match element {
+                PathElement::MoveTo(p) => write!(out, "M{},{}", p.x, p.y)?,
+                PathElement::LineTo(p) => write!(out, "L{},{}", p.x, p.y)?,
+                PathElement::QuadTo(p0, p1) => write!(out, "Q{},{} {},{}", p0.x, p0.y, p1.x, p1.y)?,
+                PathElement::CurveTo(p0, p1, p2) => write!(out, "C{},{} {},{} {},{}", p0.x, p0.y, p1.x, p1.y, p2.x, p2.y)?,
+                PathElement::Close => write!(out, "Z")?,
+            }
+        }
+        Ok(())
+    }
+}
+
+fn check_nan(_element: PathElement) {
+    // let is_nan = match element {
+    //     PathElement::MoveTo(p) => p.is_nan(),
+    //     PathElement::LineTo(p) => p.is_nan(),
+    //     PathElement::QuadTo(p0, p1)=> p0.is_nan() || p1.is_nan(),
+    //     PathElement::CurveTo(p0, p1, p2)=> p0.is_nan() || p1.is_nan() || p2.is_nan(),
+    //     _ => false,
+    // };
+    // if is_nan {
+    //     eprintln!("nan element {element:?}");
+    // }
 }
 
 #[derive(Clone, Copy)]
