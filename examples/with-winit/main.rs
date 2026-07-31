@@ -9,7 +9,7 @@ use vector_graphics::{
 
 mod app;
 
-const JBM_REGULAR: &'static [u8] = include_bytes!("../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
+const JBM_REGULAR: &'static [u8] = include_bytes!("../../JetBrainsMono-2.304/fonts/ttf/JetBrainsMono-Regular.ttf");
 // const INTER_REGULAR: &'static [u8] = include_bytes!("../Inter/Inter_18pt-Regular.ttf");
 // const DEJAVU_SANS: &'static [u8] = include_bytes!("../DejaVuSans.ttf");
 // const COMIC_MS: &'static [u8] = include_bytes!("../ComicMono.ttf");

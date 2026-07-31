@@ -5,12 +5,10 @@ edition = "2024"
 
 [dependencies]
 bytemuck = "1.25.2"
-skrifa = "0.44.0"
+
+[dev-dependencies]
+winit = "0.30.13"
 softbuffer = "0.4.8"
-
-
-[dependencies.winit]
-version = "0.30.13"
-default-features = false
-features = ["ahash", "bytemuck", "memmap2", "percent-encoding", "rwh_06", "x11", "x11-dl", "x11rb"]
+skrifa = "0.44.0"
+image = "0.25.10"
 
