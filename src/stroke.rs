@@ -248,12 +248,26 @@ impl Stroker {
             return;
         }
 
-        self.working.clear();
-        offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5);
-        self.forward.extend(self.working.elements().skip(1).copied());
-        self.working.clear();
-        offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5);
-        self.backward.extend(self.working.elements().skip(1).copied());
+        {
+            self.working.clear();
+            offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5).unwrap();
+            let elements = self.working.elements();
+            if self.forward.is_empty() {
+                self.forward.extend(elements.copied());
+            } else {
+                self.forward.extend(elements.skip(1).copied());
+            }
+        }
+        {
+            self.working.clear();
+            offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5).unwrap();
+            let elements = self.working.elements();
+            if self.backward.is_empty() {
+                self.backward.extend(elements.copied());
+            } else {
+                self.backward.extend(elements.skip(1).copied());
+            }
+        }
 
         self.current_pos = cubic.p3;
         self.current_tangent = (cubic.p3 - cubic.p2).norm();

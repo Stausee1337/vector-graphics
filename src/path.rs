@@ -371,6 +371,25 @@ impl Cubic {
         }
         inner(self, points, 0);
     }
+
+    pub fn tangents(&self) -> (Vec2, Vec2) {
+        const EPSILON: f32 = 1e-6;
+        let mut tan0 = self.p1 - self.p0;
+        if tan0.length_squared() < EPSILON {
+            tan0 = self.p2 - self.p0;
+            if tan0.length_squared() < EPSILON { 
+                tan0 = self.p3 - self.p0;
+            }
+        }
+        let mut tan1 = self.p3 - self.p2;
+        if tan1.length_squared() < EPSILON {
+            tan1 = self.p3 - self.p1;
+            if tan1.length_squared() < EPSILON {
+                tan1 = self.p3 - self.p0;
+            }
+        }
+        (tan0, tan1)
+    }
 }
 
 pub fn transform_path(src: &Path, transform: Affine) -> Path {

@@ -1,4 +1,4 @@
-use crate::{path::{Cubic, Line, Path}, vec::Vec2};
+use crate::{path::{Cubic, Path}, vec::Vec2};
 
 
 struct Hermite {
@@ -40,20 +40,17 @@ struct OffsetCubic {
 }
 
 impl OffsetCubic {
-    fn eval_curve_and_derivative(cubic: &Cubic, offset: f32, t: f32) -> Option<(Vec2, Vec2)> {
-        let derivative = cubic.derivative().evaluate(t);
-        if derivative.length_squared() < 1e-6 {
-            return None;
-        }
-        let point = cubic.evaluate(t) + derivative.turn90().norm() * offset;
-        let deriv = derivative * (1.0 - offset * cubic.curvature(t));
-        Some((point, deriv))
+    fn eval_curve_and_derivative(offset: f32, p: Vec2, tan: Vec2, curv: f32) -> (Vec2, Vec2) {
+        let point = p + tan.norm().turn90() * offset;
+        let deriv = tan * (1.0 - offset * curv);
+        (point, deriv)
     }
 
     fn form_cubic_and_offset(cubic: Cubic, offset: f32) -> Option<Self> {
         // TODO: Potentially do more on numerical hardening instead of exiting out
-        let (p0, v0) = Self::eval_curve_and_derivative(&cubic, offset, 0.0)?;
-        let (p1, v1) = Self::eval_curve_and_derivative(&cubic, offset, 1.0)?;
+        let ((tan0, tan1), (curv0, curv1)) = get_cubic_data(&cubic)?;
+        let (p0, v0) = Self::eval_curve_and_derivative(offset, cubic.p0, tan0, curv0);
+        let (p1, v1) = Self::eval_curve_and_derivative(offset, cubic.p3, tan1, curv1);
 
         let hermite = Hermite { p0, p1, v0, v1 };
 
@@ -229,14 +226,12 @@ impl OffsetCubic {
         }
     }
 
-    fn split(&self, t_subdiv: f32) -> Option<(OffsetCubic, OffsetCubic)> {
+    fn split(&self, t_subdiv: f32) -> (Option<OffsetCubic>, Option<OffsetCubic>) {
         let (cubic1, cubic2) = self.orig.split_at(t_subdiv);
-        // let cubic1 = self.orig.subsegment(0.0, t_subdiv);
-        // let cubic2 = self.orig.subsegment(t_subdiv, 1.0);
         // TODO: can probably be optimized by the information we already have
-        let oc1 = Self::form_cubic_and_offset(cubic1, self.offset)?;
-        let oc2 = Self::form_cubic_and_offset(cubic2, self.offset)?;
-        Some((oc1, oc2))
+        let oc1 = Self::form_cubic_and_offset(cubic1, self.offset);
+        let oc2 = Self::form_cubic_and_offset(cubic2, self.offset);
+        (oc1, oc2)
     }
 }
 
@@ -244,20 +239,22 @@ struct Approx<'a> {
     dest: &'a mut Path,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct DegenerateCurveError(());
+
 impl<'a> Approx<'a> {
     const MAX_SUBDIV: usize = 10;
 
-    fn approx(dest: &'a mut Path, source: Cubic, offset: f32) {
+    fn approx(dest: &'a mut Path, source: Cubic, offset: f32) -> Result<(), DegenerateCurveError> {
         let Some(oc) = OffsetCubic::form_cubic_and_offset(source, offset) else {
-            // FIXME: really ugly bail out
-            dest.move_to(source.p0);
-            dest.line_to(source.p1);
-            return;
+            return Err(DegenerateCurveError(()));
         };
         dest.move_to(oc.approx.p0);
         let mut approx = Approx { dest };
 
         approx.make_offset_recursively(oc, 0);
+
+        Ok(())
     }
 
     fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
@@ -267,12 +264,18 @@ impl<'a> Approx<'a> {
             self.dest.curve_to(approx.p1, approx.p2, approx.p3);
             return;
         }
-        let Some((oc1, oc2)) = oc.split(t_subdiv) else {
-            self.dest.curve_to(approx.p1, approx.p2, approx.p3);
-            return;
-        };
-        self.make_offset_recursively(oc1, level + 1);
-        self.make_offset_recursively(oc2, level + 1);
+        let next_level = level + 1;
+        let (oc1, oc2) = oc.split(t_subdiv);
+
+        // If we get None for oc1 or oc2 it means that we've somehow ended up with a curve with
+        // (p0 == p1 == p2 == p3), due to splitting. This really shouldn't be possible so ideally
+        // you'd unwrap, but I guess just doing nothing is also fine.
+        if let Some(oc1) = oc1 {
+            self.make_offset_recursively(oc1, next_level);
+        }
+        if let Some(oc2) = oc2 {
+            self.make_offset_recursively(oc2, next_level);
+        }
     }
 
     fn get_max_error(&self, oc: &OffsetCubic) -> (f32, f32) {
@@ -283,8 +286,37 @@ impl<'a> Approx<'a> {
     }
 }
 
-pub fn compute_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) {
-    // Numberical robustness is hard, and since this is only for reasarch I suppose this approach
+fn get_cubic_data(cubic: &Cubic) -> Option<((Vec2, Vec2), (f32, f32))> {
+    let (tan0, tan1) = cubic.tangents();
+    let (tan0, tan1) = (tan0 * 3.0, tan1 * 3.0);
+
+    const EPSILON: f32 = 1e-6;
+    if tan0.length_squared() < EPSILON || tan1.length_squared() < EPSILON {
+        // even with all the numerical robustness of Cubic::tangents() it can still be zero 
+        // (p0 == p1 == p2 == p3), so a degenerate bezier. In this case we can't build an offset
+        // curve.
+        return None;
+    }
+
+    let derivative1 = cubic.derivative();
+    let derivative2 = derivative1.derivative();
+
+    fn get_curvature(d1: Vec2, d2: Vec2) -> f32 {
+        // κ = (x'y'' - y'x'')/(x'² + y'²)^(3 / 2)
+
+        let num = d1.x * d2.y - d1.y * d2.x;
+        let denom = d1.x.hypot(d1.y);
+        num/(denom * denom * denom)
+    }
+
+    let curv0 = get_curvature(tan0, derivative2.p0);
+    let curv1 = get_curvature(tan1, derivative2.p1);
+
+    Some(((tan0, tan1), (curv0, curv1)))
+}
+
+pub fn compute_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) -> Result<(), DegenerateCurveError> {
+    // Peformence and low curve count is hard, and since this is only for reasarch I suppose this approach
     // is fine
     Approx::approx(dest, cubic, offset)
 }
