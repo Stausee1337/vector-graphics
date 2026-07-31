@@ -277,6 +277,20 @@ impl Quadratic {
         let c2 = self.p2 - (self.p2 - self.p1)*TWO_THIRDS;
         Cubic::new(self.p0, c1, c2, self.p2)
     }
+
+
+    pub fn tangents(&self) -> (Vec2, Vec2) {
+        const EPSILON: f32 = 1e-6;
+        let mut tan0 = self.p1 - self.p0;
+        if tan0.length_squared() < EPSILON { 
+            tan0 = self.p2 - self.p0;
+        }
+        let mut tan1 = self.p2 - self.p1;
+        if tan1.length_squared() < EPSILON { 
+            tan1 = self.p2 - self.p0;
+        }
+        (tan0, tan1)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

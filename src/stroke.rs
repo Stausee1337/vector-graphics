@@ -46,16 +46,20 @@ pub fn expand_stroke(path: &Path, stroke: &Stroke) -> Path {
             },
             &PathElement::QuadTo(control, endpoint) => {
                 let quad = Quadratic::new(current_position, control, endpoint);
-                let tangent = control - current_position;
-                stroker.do_join(tangent);
+                let (tan0, tan1) = quad.tangents();
+                stroker.do_join(tan0);
                 stroker.do_cubic(quad.as_cubic());
+                stroker.current_pos = endpoint;
+                stroker.current_tangent = tan1.norm();
                 current_position = endpoint;
             },
             &PathElement::CurveTo(control1, control2, endpoint) => {
                 let cubic = Cubic::new(current_position, control1, control2, endpoint);
-                let tangent = control1 - current_position;
-                stroker.do_join(tangent);
+                let (tan0, tan1) = cubic.tangents();
+                stroker.do_join(tan0);
                 stroker.do_cubic(cubic);
+                stroker.current_pos = endpoint;
+                stroker.current_tangent = tan1.norm();
                 current_position = endpoint;
             }
             PathElement::Close => {
@@ -82,6 +86,7 @@ pub struct Stroker {
     backward: Path,
     current_pos: Vec2,
     current_tangent: Vec2,
+    start_tangent: Vec2,
 }
 
 enum IncompleteConstructor {
@@ -116,6 +121,7 @@ impl Stroker {
             backward: Path::new(),
             current_pos: Vec2::new(0.0, 0.0),
             current_tangent: Vec2::new(0.0, 0.0),
+            start_tangent: Vec2::new(0.0, 0.0)
         }
     }
 
@@ -128,17 +134,17 @@ impl Stroker {
             return;
         }
 
-        {
-            let start = self.forward.startpoint().unwrap();
-            self.forward.push(PathElement::LineTo(start));
+        // {
+        //     let start = self.forward.startpoint().unwrap();
+        //     self.forward.push(PathElement::LineTo(start));
 
-            let start = self.backward.startpoint().unwrap();
-            self.backward.push(PathElement::LineTo(start));
-            // self.do_join(tangent_next);
-        }
+        //     let start = self.backward.startpoint().unwrap();
+        //     self.backward.push(PathElement::LineTo(start));
+        //     // self.do_join(tangent_next);
+        // }
 
         self.output.extend(self.forward.elements().copied());
-        extend_reversed(&mut self.output, &self.backward);
+        extend_reversed(&mut self.output, &self.backward, IncompleteConstructor::LineTo);
 
         self.output.close();
         self.forward.clear();
@@ -150,10 +156,12 @@ impl Stroker {
             return;
         }
 
+        self.do_join(self.start_tangent);
+
         self.forward.close();
 
         self.output.extend(self.forward.elements().copied());
-        extend_reversed(&mut self.output, &self.backward);
+        extend_reversed(&mut self.output, &self.backward, IncompleteConstructor::MoveTo);
         self.output.close();
 
         self.forward.clear();
@@ -163,7 +171,6 @@ impl Stroker {
     fn do_join(&mut self, mut tangent_next: Vec2) {
 
         if tangent_next.length_squared() <= 1e-6 {
-            eprintln!("extremely small tangent");
             return;
         }
         tangent_next = tangent_next.norm();
@@ -181,6 +188,7 @@ impl Stroker {
         let (Some(fw_prev), Some(bw_prev)) = (self.forward.endpoint(), self.backward.endpoint()) else {
             self.forward.move_to(fw_next);
             self.backward.move_to(bw_next);
+            self.start_tangent = tangent_next;
             return;
         };
 
@@ -269,13 +277,11 @@ impl Stroker {
             }
         }
 
-        self.current_pos = cubic.p3;
-        self.current_tangent = (cubic.p3 - cubic.p2).norm();
     }
 }
 
-fn extend_reversed(dest: &mut Path, src: &Path) {
-    let mut incomplete_constructor = IncompleteConstructor::MoveTo;
+fn extend_reversed(dest: &mut Path, src: &Path, mut incomplete_constructor: IncompleteConstructor) {
+    // let mut incomplete_constructor = IncompleteConstructor::MoveTo;
     for element in src.elements().rev() {
         match element {
             &PathElement::LineTo(endpoint) => {
