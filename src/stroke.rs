@@ -1,4 +1,3 @@
-
 use crate::{offset, path::{Cubic, Line, Path, PathElement, Quadratic}, vec::Vec2};
 
 #[derive(Clone, Copy)]
@@ -134,15 +133,6 @@ impl Stroker {
             return;
         }
 
-        // {
-        //     let start = self.forward.startpoint().unwrap();
-        //     self.forward.push(PathElement::LineTo(start));
-
-        //     let start = self.backward.startpoint().unwrap();
-        //     self.backward.push(PathElement::LineTo(start));
-        //     // self.do_join(tangent_next);
-        // }
-
         self.output.extend(self.forward.elements().copied());
         extend_reversed(&mut self.output, &self.backward, IncompleteConstructor::LineTo);
 
@@ -168,34 +158,33 @@ impl Stroker {
         self.backward.clear();
     }
 
-    fn do_join(&mut self, mut tangent_next: Vec2) {
-
-        if tangent_next.length_squared() <= 1e-6 {
+    fn do_join(&mut self, mut next_tan: Vec2) {
+        if next_tan.length_squared() <= 1e-6 {
             return;
         }
-        tangent_next = tangent_next.norm();
-        let tangent_prev = self.current_tangent;
+        next_tan = next_tan.norm();
 
-        if tangent_prev.is_nan() {
+        let curr_tan = self.current_tangent;
+        if curr_tan.is_nan() {
             eprintln!("current tangent is nan");
             return;
         }
 
-        let normal = tangent_next.turn90();
-        let fw_next = self.current_pos - normal * self.stroke.width * 0.5;
-        let bw_next = self.current_pos + normal * self.stroke.width * 0.5;
+        let curr_pos = self.current_pos;
 
-        let (Some(fw_prev), Some(bw_prev)) = (self.forward.endpoint(), self.backward.endpoint()) else {
-            self.forward.move_to(fw_next);
-            self.backward.move_to(bw_next);
-            self.start_tangent = tangent_next;
+        let offset_vec = next_tan.turn90() * self.stroke.width * 0.5;
+        let next_fw = curr_pos - offset_vec;
+        let next_bw = curr_pos + offset_vec;
+
+        let (Some(curr_fw), Some(curr_bw)) = (self.forward.endpoint(), self.backward.endpoint()) else {
+            self.forward.move_to(next_fw);
+            self.backward.move_to(next_bw);
+            self.start_tangent = next_tan;
             return;
         };
 
-        let ab = tangent_prev;
-        let cd = tangent_next;
-        let cross = ab.cross(cd);
-        let dot = ab.dot(cd);
+        let cross = curr_tan.cross(next_tan);
+        let dot = curr_tan.dot(next_tan);
         let hypot = cross.hypot(dot);
 
         let join_threshold = 0.5 / self.stroke.width;
@@ -205,30 +194,26 @@ impl Stroker {
 
         match self.stroke.join {
             Join::Bevel => {
-                self.forward.push(PathElement::LineTo(fw_next));
-                self.backward.push(PathElement::LineTo(bw_next));
+                self.forward.line_to(next_fw);
+                self.backward.line_to(next_bw);
             }
             Join::Miter { miter_limit } => {
                 if dot.abs() <= 1.0 - 2. / (miter_limit * miter_limit) {
                     if cross > 0.0 {
-                        let fp_last = fw_prev;
-                        let fp_this = fw_next;
-                        let h = ab.cross(fp_this - fp_last) / cross;
-                        let miter_pt = fp_this - cd * h;
-                        self.forward.line_to(miter_pt);
+                        let lambda = (next_fw - curr_fw).cross(next_tan)/cross;
+                        let join = curr_fw + curr_tan * lambda;
+                        self.forward.line_to(join);
                         self.backward.line_to(self.current_pos);
                     } else if cross < 0.0 {
-                        let fp_last = bw_prev;
-                        let fp_this = bw_next;
-                        let h = ab.cross(fp_this - fp_last) / cross;
-                        let miter_pt = fp_this - cd * h;
-                        self.backward.line_to(miter_pt);
+                        let lambda = (next_bw - curr_bw).cross(next_tan)/cross;
+                        let join = curr_bw + curr_tan * lambda;
+                        self.backward.line_to(join);
                         self.forward.line_to(self.current_pos);
                     }
                 }
 
-                self.forward.push(PathElement::LineTo(fw_next));
-                self.backward.push(PathElement::LineTo(bw_next));
+                self.forward.line_to(next_fw);
+                self.backward.line_to(next_bw);
             }
             Join::Round => todo!()
         }
@@ -239,12 +224,16 @@ impl Stroker {
         if (line.p1 - line.p0).length() <= EPSILON {
             return;
         }
-        let forward = make_offset_line(&line, -self.stroke.width * 0.5);
-        let backward = make_offset_line(&line, self.stroke.width * 0.5);
-        self.forward.line_to(forward.p1);
-        self.backward.line_to(backward.p1);
+
+        let tangent = line.tangent().norm();
+        let offset_vec = tangent.turn90() * self.stroke.width * 0.5;
+        let p1_fw = line.p1 - offset_vec;
+        let p1_bw = line.p1 + offset_vec;
+
+        self.forward.line_to(p1_fw);
+        self.backward.line_to(p1_bw);
         self.current_pos = line.p1;
-        self.current_tangent = (line.p1 - line.p0).norm();
+        self.current_tangent = tangent;
     }
 
     fn do_cubic(&mut self, cubic: Cubic) {
@@ -281,7 +270,6 @@ impl Stroker {
 }
 
 fn extend_reversed(dest: &mut Path, src: &Path, mut incomplete_constructor: IncompleteConstructor) {
-    // let mut incomplete_constructor = IncompleteConstructor::MoveTo;
     for element in src.elements().rev() {
         match element {
             &PathElement::LineTo(endpoint) => {
@@ -303,16 +291,5 @@ fn extend_reversed(dest: &mut Path, src: &Path, mut incomplete_constructor: Inco
             PathElement::Close => unreachable!()
         }
     }
-}
-
-fn make_offset_line(line: &Line, offset: f32) -> Line {
-    // L(t) = A + (B - A)t
-    // L'(t) = (B - A)
-    // L_d(t) = L(t) + d*N(t), where N(t) = (y'(t), -x'(t))/|L'(t)|
-    // N(t) = (yb - ya, xa - xb).norm()
-    let offset_vec = (line.p1 - line.p0).turn90().norm() * offset;
-    let p0 = line.p0 + offset_vec;
-    let p1 = line.p1 + offset_vec;
-    Line::new(p0, p1)
 }
 
