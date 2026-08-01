@@ -85,7 +85,7 @@ fn parse_element(element: &Element) -> DrawData {
     let path = parse_commands(element.commands).unwrap();
     DrawData {
         fill: element.fill.map(map_color),
-        stroke: element.stroke.map(|x| (Stroke { width: element.stroke_width.unwrap_or(1.0).max(1.0), join: Join::Miter { miter_limit: 4.0 }}, map_color(x))),
+        stroke: element.stroke.map(|x| (Stroke { width: element.stroke_width.unwrap_or(1.0), join: Join::Miter { miter_limit: 4.0 }}, map_color(x))),
         path 
     }
 }
