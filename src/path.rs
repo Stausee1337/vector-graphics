@@ -337,7 +337,6 @@ impl Quadratic {
         Cubic::new(self.p0, c1, c2, self.p2)
     }
 
-
     pub fn tangents(&self) -> (Vec2, Vec2) {
         const EPSILON: f32 = 1e-6;
         let mut tan0 = self.p1 - self.p0;
@@ -574,13 +573,16 @@ pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
 }
 
 pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform: Affine, color: Color) { 
-    // FIXME: we should be incorperating the resulting scale from the transform into the stroke 
-    // expansion for correct error tolerance estimates.
-
-    // TODO: choose hairline rendering in case the resulting stroke width gets as small as only 1px
-    // or smaller
-    let stroked = stroke::expand_stroke(path, stroke);
-    fill_path(canvas, &stroked, transform, color);
+    let scale = transform.determinant().abs().sqrt();
+    let resulting_scale = stroke.width * scale;
+    if resulting_scale <= 1.0 {
+        let scale = (resulting_scale * 256.0) as i32;
+        let new_alpha = (255 * scale) >> 8;
+        draw_path_hairline(canvas, path, transform, color.with_alpha(new_alpha as u8));
+    } else {
+        let stroked = stroke::expand_stroke(path, stroke);
+        fill_path(canvas, &stroked, transform, color);
+    }
 }
 
 pub fn draw_path_hairline(canvas: &mut Canvas, path: &Path, transform: Affine, color: Color) {
@@ -622,11 +624,7 @@ pub fn draw_path_hairline(canvas: &mut Canvas, path: &Path, transform: Affine, c
             }
         }
 
-        let mut i = 0;
-        while i < points.len() - 1 {
-            primitives::line(canvas, points[i], points[i + 1], color);
-            i += 1;
-        }
+        primitives::anti_polyline(canvas, &points, color);
     }
 }
 

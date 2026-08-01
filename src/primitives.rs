@@ -249,3 +249,124 @@ fn draw_active_edges(aet: &[Edge], scanline: &mut [u8], width: i32, max_weight: 
     }
 }
 
+pub fn anti_line(canvas: &mut Canvas, p0: Vec2, p1: Vec2, color: Color) {
+    anti_line_generic::<false>(canvas, p0, p1, color);
+}
+
+pub fn anti_polyline(canvas: &mut Canvas, points: &[Vec2], color: Color) {
+    assert!(points.len() >= 2);
+    anti_line_generic::<false>(canvas, points[0], points[1], color);
+
+    let mut i = 1;
+    while i < points.len() - 1 {
+        anti_line_generic::<true>(canvas, points[i], points[i + 1], color);
+        i += 1;
+    }
+}
+
+/// Draws an anti aliased line segment between point p0, p1 using Xiaolin Wu's line algorithm. Code
+/// adapted from wikipedia sample https://en.wikipedia.org/wiki/Xiaolin_Wu%27s_line_algorithm.
+///
+/// If the generic `POLYLINE` paramter is true, the function does not draw starting point, instead
+/// leaving that to the to the previous invocation.
+fn anti_line_generic<const POLYLINE: bool>(canvas: &mut Canvas, p0: Vec2, p1: Vec2, color: Color) {
+    // TODO: the result is ok, but I think still shows some artifacting, especially at joins in
+    // polylines. There is not much that can be done about this, except for not drawing the curve
+    // as segments. One approach though, might be to split the bezier curves into cricular arcs, 
+    // instead of lines and using the circle algorithm corresponding to this line algorithm. Since
+    // bezier curves are typically better approximated by arcs, this would reduce the number of
+    // joins, and such artifacting.
+    let Vec2 { x: mut x0, y: mut y0 } = p0;
+    let Vec2 { x: mut x1, y: mut y1 } = p1;
+    let steep = (y1 - y0).abs() > (x1 - x0).abs();
+
+    if steep {
+        (x0, y0) = (y0, x0);
+        (x1, y1) = (y1, x1);
+    }
+
+    let reversed = x0 > x1;
+    if reversed {
+        (x0, x1) = (x1, x0);
+        (y0, y1) = (y1, y0);
+    }
+
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+
+    let gradient;
+    const EPSILON: f32 = 1e-6;
+    if dx.abs() < EPSILON {
+        gradient = 1.0;
+    } else {
+        gradient = dy / dx;
+    }
+
+    let xend = x0.floor();
+    let yend = y0 + gradient * (xend - x0);
+    let xgap = 1.0 - (x0 - xend);
+    let xend = xend as i32;
+    let xpxl1 = xend;
+    let ypxl1 = yend.floor() as i32;
+
+    if !POLYLINE || reversed {
+        if steep {
+            plot(canvas, color, ypxl1,   xpxl1, rfpart(yend) * xgap);
+            plot(canvas, color, ypxl1+1, xpxl1,  fpart(yend) * xgap);
+        } else {
+            plot(canvas, color, xpxl1, ypxl1,  rfpart(yend) * xgap);
+            plot(canvas, color, xpxl1, ypxl1+1, fpart(yend) * xgap);
+        }
+    }
+    let mut intery = yend + gradient;
+
+    let xend = x1.ceil();
+    let yend = y1 + gradient * (xend - x1);
+    let xgap = 1.0 - (xend - x1);
+    let xend = xend as i32;
+    let xpxl2 = xend;
+    let ypxl2 = yend.floor() as i32;
+
+    if !POLYLINE || !reversed {
+        if steep {
+            plot(canvas, color, ypxl2,   xpxl2, rfpart(yend) * xgap);
+            plot(canvas, color, ypxl2+1, xpxl2,  fpart(yend) * xgap);
+        } else {
+            plot(canvas, color, xpxl2, ypxl2,  rfpart(yend) * xgap);
+            plot(canvas, color, xpxl2, ypxl2+1, fpart(yend) * xgap);
+        }
+    }
+
+    if steep {
+        for x in xpxl1+1..=xpxl2-1 {
+            plot(canvas, color, intery.floor() as i32   , x, rfpart(intery));
+            plot(canvas, color, intery.floor() as i32 +1, x,  fpart(intery));
+            intery += gradient;
+        }
+    } else {
+        for x in xpxl1+1..=xpxl2-1 {
+            plot(canvas, color, x, intery.floor() as i32   , rfpart(intery));
+            plot(canvas, color, x, intery.floor() as i32 +1,  fpart(intery));
+            intery += gradient;
+        }
+    }
+
+    fn fpart(x: f32) -> f32 {
+        x.fract()
+    }
+
+    fn rfpart(x: f32) -> f32 {
+        1.0 - fpart(x)
+    }
+
+    fn plot(canvas: &mut Canvas, color: Color, x: i32, y: i32, alpha: f32) {
+        if x < 0 || y < 0 || x >= canvas.width() || y >= canvas.height() {
+            return;
+        }
+        let pixel = canvas.at_mut(x, y);
+
+        let alpha = (((alpha * 255.0) as u32 * color.alpha() as u32)/255) as u8;
+        *pixel = pixel.blend(color.with_alpha(alpha));
+    }
+}
+

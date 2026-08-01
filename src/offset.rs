@@ -33,7 +33,7 @@ impl Scalar for f32 {
 struct OffsetCubic {
     orig: Cubic,
     approx: Cubic,
-    offset: f32,
+    offset: f32, 
     coeffs: [f32; 7],
     deriv1_coeffs: [f32; 6],
     deriv2_coeffs: [f32; 5],
