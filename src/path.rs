@@ -1,5 +1,4 @@
 use core::fmt;
-use std::fmt::Write;
 
 use crate::{affine::Affine, canvas::Canvas, color::Color, primitives, stroke::{self, Stroke}, vec::Vec2};
 
@@ -216,6 +215,10 @@ impl Line {
 
     pub fn evaluate(&self, t: f32) -> Vec2 {
         self.p0.lerp(self.p1, t)
+    }
+
+    pub fn tangent(&self) -> Vec2 {
+        self.p1 - self.p0
     }
 }
 
@@ -515,10 +518,14 @@ pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
     primitives::polygon(canvas, &points, &runs, color);
 }
 
-pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform: Affine, color: Color) {
-    
-    let stroked = stroke::expand_stroke(&transform_path(path, transform), stroke);
-    fill_path(canvas, &stroked, Affine::IDENTITY, color);
+pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform: Affine, color: Color) { 
+    // FIXME: we should be incorperating the resulting scale from the transform into the stroke 
+    // expansion for correct error tolerance estimates.
+
+    // TODO: choose hairline rendering in case the resulting stroke with gets as small as only 1px
+    // or smaller
+    let stroked = stroke::expand_stroke(path, stroke);
+    fill_path(canvas, &stroked, transform, color);
 }
 
 pub fn draw_path_hairline(canvas: &mut Canvas, path: &Path, transform: Affine, color: Color) {
