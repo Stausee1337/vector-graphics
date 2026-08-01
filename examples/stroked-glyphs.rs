@@ -81,7 +81,7 @@ fn main() {
 
     let mut string = String::new();
     for path in get_glyphs(TEXT, &font) {
-        let stroked = expand_stroke(&path, &stroke);
+        let stroked = expand_stroke(&path, &stroke, 1.0);
         stroked.as_svg(&mut string).unwrap();
     }
 

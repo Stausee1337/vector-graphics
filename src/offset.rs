@@ -237,6 +237,7 @@ impl OffsetCubic {
 
 struct Approx<'a> {
     dest: &'a mut Path,
+    resulting_scale: f32
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -245,12 +246,12 @@ pub struct DegenerateCurveError(());
 impl<'a> Approx<'a> {
     const MAX_SUBDIV: usize = 10;
 
-    fn approx(dest: &'a mut Path, source: Cubic, offset: f32) -> Result<(), DegenerateCurveError> {
+    fn approx(dest: &'a mut Path, source: Cubic, offset: f32, resulting_scale: f32) -> Result<(), DegenerateCurveError> {
         let Some(oc) = OffsetCubic::form_cubic_and_offset(source, offset) else {
             return Err(DegenerateCurveError(()));
         };
         dest.move_to(oc.approx.p0);
-        let mut approx = Approx { dest };
+        let mut approx = Approx { dest, resulting_scale };
 
         approx.make_offset_recursively(oc, 0);
 
@@ -260,7 +261,8 @@ impl<'a> Approx<'a> {
     fn make_offset_recursively(&mut self, oc: OffsetCubic, level: usize) {
         let (t_subdiv, max_err) = self.get_max_error(&oc);
         let approx = &oc.approx;
-        if max_err <= 0.25 || level >= Self::MAX_SUBDIV {
+        let threshold = 0.25 / self.resulting_scale;
+        if max_err <= threshold || level >= Self::MAX_SUBDIV {
             self.dest.curve_to(approx.p1, approx.p2, approx.p3);
             return;
         }
@@ -315,9 +317,9 @@ fn get_cubic_data(cubic: &Cubic) -> Option<((Vec2, Vec2), (f32, f32))> {
     Some(((tan0, tan1), (curv0, curv1)))
 }
 
-pub fn compute_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32) -> Result<(), DegenerateCurveError> {
+pub fn compute_offset_curve(dest: &mut Path, cubic: Cubic, offset: f32, resulting_scale: f32) -> Result<(), DegenerateCurveError> {
     // Peformence and low curve count is hard, and since this is only for reasarch I suppose this approach
     // is fine
-    Approx::approx(dest, cubic, offset)
+    Approx::approx(dest, cubic, offset, resulting_scale)
 }
 

@@ -15,8 +15,8 @@ pub struct Stroke {
     pub join: Join
 }
 
-pub fn expand_stroke(path: &Path, stroke: &Stroke) -> Path {
-    let mut stroker = Stroker::new(stroke.clone());
+pub fn expand_stroke(path: &Path, stroke: &Stroke, resulting_scale: f32) -> Path {
+    let mut stroker = Stroker::new(stroke.clone(), resulting_scale);
 
     if path.is_empty() {
         return stroker.output;
@@ -79,6 +79,8 @@ pub fn expand_stroke(path: &Path, stroke: &Stroke) -> Path {
 
 pub struct Stroker {
     stroke: Stroke,
+    resulting_scale: f32,
+
     output: Path,
     working: Path,
     forward: Path,
@@ -111,9 +113,11 @@ impl IncompleteConstructor {
 }
 
 impl Stroker {
-    pub fn new(stroke: Stroke) -> Stroker {
+    pub fn new(stroke: Stroke, resulting_scale: f32) -> Stroker {
         Stroker {
             stroke,
+            resulting_scale,
+
             output: Path::new(),
             working: Path::new(),
             forward: Path::new(),
@@ -187,7 +191,7 @@ impl Stroker {
         let dot = curr_tan.dot(next_tan);
         let hypot = cross.hypot(dot);
 
-        let join_threshold = 0.5 / self.stroke.width;
+        let join_threshold = 0.5 / (self.resulting_scale * self.stroke.width);
         if dot > 0.0 && cross.abs() < hypot * join_threshold {
             return;
         }
@@ -247,7 +251,7 @@ impl Stroker {
 
         {
             self.working.clear();
-            offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5).unwrap();
+            offset::compute_offset_curve(&mut self.working, cubic, -self.stroke.width * 0.5, self.resulting_scale).unwrap();
             let elements = self.working.elements();
             if self.forward.is_empty() {
                 self.forward.extend(elements.copied());
@@ -257,7 +261,7 @@ impl Stroker {
         }
         {
             self.working.clear();
-            offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5).unwrap();
+            offset::compute_offset_curve(&mut self.working, cubic, self.stroke.width * 0.5, self.resulting_scale).unwrap();
             let elements = self.working.elements();
             if self.backward.is_empty() {
                 self.backward.extend(elements.copied());

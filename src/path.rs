@@ -573,6 +573,13 @@ pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
 }
 
 pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform: Affine, color: Color) { 
+    // let transform2 = {
+    //     let [a, b, c, d, _, _] = transform.as_coeffs();
+    //     Affine::new([a, b, c, d, 0.0, 0.0])
+    // };
+    // let p1 = (transform2 * Vec2::new(stroke.width, 0.0)).length();
+    // let p2 = (transform2 * Vec2::new(0.0, stroke.width)).length();
+    // let scale1 = (p1.length()*p2.length()).sqrt();
     let scale = transform.determinant().abs().sqrt();
     let resulting_scale = stroke.width * scale;
     if resulting_scale <= 1.0 {
@@ -580,7 +587,7 @@ pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform:
         let new_alpha = (255 * scale) >> 8;
         draw_path_hairline(canvas, path, transform, color.with_alpha(new_alpha as u8));
     } else {
-        let stroked = stroke::expand_stroke(path, stroke);
+        let stroked = stroke::expand_stroke(path, stroke, resulting_scale);
         fill_path(canvas, &stroked, transform, color);
     }
 }
