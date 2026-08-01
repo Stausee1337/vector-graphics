@@ -23,6 +23,13 @@ impl PathElement {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum PathSegment {
+    Line(Line),
+    Quadratic(Quadratic),
+    Cubic(Cubic),
+}
+
 #[derive(Default)]
 pub struct Path {
     elements: Vec<PathElement>
@@ -172,6 +179,53 @@ impl Path {
         })
     }
 
+    pub fn segments(&self) -> impl Iterator<Item = PathSegment> {
+        let mut elements = self.elements();
+        let mut current_position = if let Some(&PathElement::MoveTo(p)) = elements.next() {
+            p
+        } else {
+            Vec2::new(0.0, 0.0)
+        };
+        let mut start_position = current_position;
+        std::iter::from_fn(move || {
+            loop {
+                let Some(element) = elements.next() else {
+                    return None;
+                };
+
+                let segment = match element {
+                    &PathElement::MoveTo(p) => {
+                        current_position = p;
+                        start_position = p;
+                        continue;
+                    }
+                    &PathElement::LineTo(p) => {
+                        let line = Line::new(current_position, p);
+                        current_position = p;
+                        PathSegment::Line(line)
+                    }
+                    &PathElement::QuadTo(control, p) => {
+                        let quad = Quadratic::new(current_position, control, p);
+                        current_position = p;
+                        PathSegment::Quadratic(quad)
+                    }
+                    &PathElement::CurveTo(control1, control2, p) => {
+                        let curve = Cubic::new(current_position, control1, control2, p);
+                        current_position = p;
+                        PathSegment::Cubic(curve)
+                    }
+                    PathElement::Close => {
+                        let line = Line::new(current_position, start_position);
+                        current_position = start_position;
+                        PathSegment::Line(line)
+                    }
+                };
+
+                return Some(segment);
+            }
+        })
+    }
+
     pub fn as_svg(&self, out: &mut dyn fmt::Write) -> fmt::Result {
         for (idx, element) in self.elements().enumerate() {
             if idx > 0 {
@@ -204,7 +258,7 @@ fn check_nan(element: PathElement) {
 #[cfg(not(debug_assertions))]
 fn check_nan(_element: PathElement) { }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Line {
     pub p0: Vec2,
     pub p1: Vec2,
@@ -224,7 +278,7 @@ impl Line {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Quadratic {
     pub p0: Vec2,
     pub p1: Vec2,
