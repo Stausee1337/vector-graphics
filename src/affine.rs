@@ -2,7 +2,7 @@ use std::ops::Mul;
 
 use crate::vec::Vec2;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Affine([f32; 6]);
 
 impl Affine {
@@ -23,6 +23,15 @@ impl Affine {
     pub fn rotate(angle: f32) -> Affine {
         let (s, c) = angle.sin_cos();
         Affine([c, -s, s, c, 0.0, 0.0])
+    }
+
+    pub fn as_coeffs(self) -> [f32; 6] {
+        self.0
+    }
+
+    pub fn determinant(self) -> f32 {
+        let [a, b, c, d, _, _] = self.0;
+        a * d - b * c
     }
 }
 

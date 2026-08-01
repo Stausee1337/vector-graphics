@@ -189,18 +189,20 @@ impl Path {
     }
 }
 
-fn check_nan(_element: PathElement) {
-    // let is_nan = match element {
-    //     PathElement::MoveTo(p) => p.is_nan(),
-    //     PathElement::LineTo(p) => p.is_nan(),
-    //     PathElement::QuadTo(p0, p1)=> p0.is_nan() || p1.is_nan(),
-    //     PathElement::CurveTo(p0, p1, p2)=> p0.is_nan() || p1.is_nan() || p2.is_nan(),
-    //     _ => false,
-    // };
-    // if is_nan {
-    //     eprintln!("nan element {element:?}");
-    // }
+#[cfg(debug_assertions)]
+fn check_nan(element: PathElement) {
+    let is_nan = match element {
+        PathElement::MoveTo(p) => p.is_nan(),
+        PathElement::LineTo(p) => p.is_nan(),
+        PathElement::QuadTo(p0, p1)=> p0.is_nan() || p1.is_nan(),
+        PathElement::CurveTo(p0, p1, p2)=> p0.is_nan() || p1.is_nan() || p2.is_nan(),
+        _ => false,
+    };
+    assert!(!is_nan, "NaN elements should not appear in Path");
 }
+
+#[cfg(not(debug_assertions))]
+fn check_nan(_element: PathElement) { }
 
 #[derive(Clone, Copy)]
 pub struct Line {
@@ -414,15 +416,15 @@ pub fn transform_path(src: &Path, transform: Affine) -> Path {
     for element in src.elements() {
         match element {
             &PathElement::MoveTo(p0) =>
-                dest.push(PathElement::MoveTo(transform * p0)),
+                dest.move_to(transform * p0),
             &PathElement::LineTo(p0) =>
-                dest.push(PathElement::LineTo(transform * p0)),
+                dest.line_to(transform * p0),
             &PathElement::QuadTo(p0, p1) =>
-                dest.push(PathElement::QuadTo(transform * p0, transform * p1)),
+                dest.quad_to(transform * p0, transform * p1),
             &PathElement::CurveTo(p0, p1, p2) =>
-                dest.push(PathElement::CurveTo(transform * p0, transform * p1, transform * p2)),
+                dest.curve_to(transform * p0, transform * p1, transform * p2),
             PathElement::Close =>
-                dest.push(PathElement::Close)
+                dest.close()
         }
     }
 
@@ -440,25 +442,25 @@ pub fn promote_path(src: &Path) -> Path {
         for element in elements {
             match element {
                 &PathElement::MoveTo(endpoint) => {
-                    dest.push(PathElement::MoveTo(endpoint));
+                    dest.move_to(endpoint);
                     current_position = endpoint;
                 }
                 &PathElement::LineTo(endpoint) => {
                     // TODO: promote lines into cubic beziers as well
-                    dest.push(PathElement::LineTo(endpoint));
+                    dest.line_to(endpoint);
                     current_position = endpoint;
                 }
                 &PathElement::QuadTo(control, endpoint) => {
                     let cubic = Quadratic::new(current_position, control, endpoint).as_cubic();
-                    dest.push(PathElement::CurveTo(cubic.p1, cubic.p2, cubic.p3));
+                    dest.curve_to(cubic.p1, cubic.p2, cubic.p3);
                     current_position = endpoint;
                 }
                 &PathElement::CurveTo(control1, control2, endpoint) => {
-                    dest.push(PathElement::CurveTo(control1, control2, endpoint));
+                    dest.curve_to(control1, control2, endpoint);
                     current_position = endpoint;
                 }
                 PathElement::Close =>
-                    dest.push(PathElement::Close)
+                    dest.close()
             }
         }
     }
@@ -473,48 +475,47 @@ pub fn fill_path(canvas: &mut Canvas, path: &Path, transform: Affine, color: Col
     for subpath in path.subpaths() {
         if subpath.len() < 2 { continue; }
 
-        // NOTE: instead of transforming all of the points during flattening (which I guess is
-        // fine, though), we could multiply the error threshold in the flattening by the transforms
-        // scale obtained through single value decomposition
-
         let PathElement::MoveTo(mut current_position) = subpath[0] else { unreachable!() };
         current_position = transform * current_position;
 
         let start = points.len();
-        for element in subpath {
+        let mut closed = false;
+        for element in &subpath[1..] {
             match element {
                 &PathElement::LineTo(endpoint) => {
-                    if endpoint.is_nan() { panic!("nan found in LineTo"); }
                     let tendpoint = transform * endpoint;
                     points.push(current_position);
                     points.push(tendpoint);
                     current_position = tendpoint;
                 },
                 &PathElement::QuadTo(control_point, endpoint) => {
-                    if control_point.is_nan() || endpoint.is_nan() { panic!("nan found in QuadTo"); }
                     let tendpoint = transform * endpoint;
                     let quadratic = Quadratic::new(current_position, transform * control_point, tendpoint);
                     quadratic.flatten(&mut points);
                     current_position = tendpoint;
                 },
                 &PathElement::CurveTo(control1, control2, endpoint) => {
-                    if control1.is_nan() || control1.is_nan() || endpoint.is_nan() { panic!("nan found in CurveTo"); }
                     let tendpoint = transform * endpoint;
                     let cubic = Cubic::new(current_position, transform * control1, transform * control2, tendpoint);
                     cubic.flatten(&mut points);
                     current_position = tendpoint;
                 }
                 PathElement::Close => {
-                    if points.len() > start {
-                        runs.push((start, points.len() - 1));
+                    if points.len() - start >= 3 {
+                        runs.push(points.len() - start);
+                        closed = true;
                     }
                     break;
                 },
-                PathElement::MoveTo(..) => (),
+                PathElement::MoveTo(..) => unreachable!(),
             }
+        }
+        if !closed {
+            points.truncate(start);
         }
     }
 
+    if runs.is_empty() { return; }
     primitives::polygon(canvas, &points, &runs, color);
 }
 
@@ -522,7 +523,7 @@ pub fn stroke_path(canvas: &mut Canvas, path: &Path, stroke: &Stroke, transform:
     // FIXME: we should be incorperating the resulting scale from the transform into the stroke 
     // expansion for correct error tolerance estimates.
 
-    // TODO: choose hairline rendering in case the resulting stroke with gets as small as only 1px
+    // TODO: choose hairline rendering in case the resulting stroke width gets as small as only 1px
     // or smaller
     let stroked = stroke::expand_stroke(path, stroke);
     fill_path(canvas, &stroked, transform, color);
@@ -534,9 +535,6 @@ pub fn draw_path_hairline(canvas: &mut Canvas, path: &Path, transform: Affine, c
     for subpath in path.subpaths() {
         if subpath.len() < 2 { continue; }
 
-        // NOTE: instead of transforming all of the points during flattening (which I guess is
-        // fine, though), we could multiply the error threshold in the flattening by the transforms
-        // scale obtained through single value decomposition
         points.clear();
 
         let PathElement::MoveTo(mut current_position) = subpath[0] else { unreachable!() };

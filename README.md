@@ -20,7 +20,7 @@ An exploration of concepts and algorithms in the field of CPU vector graphics.
         correctly
     - [ ] Resort to drawing hairlines instead of filled primitives when stroke width gets small
   - [ ] Rasterization
-    - [ ] Some correctness and speedup improvements in `primitives.rs`
+    - [x] Some correctness and speedup improvements in `primitives.rs`
     - [ ] Evenodd fill rule
 - [ ] Design revisions
   - [ ] Make the Stroker more logical and comprehensible

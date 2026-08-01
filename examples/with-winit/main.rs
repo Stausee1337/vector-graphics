@@ -4,7 +4,7 @@ use skrifa::{FontRef, MetadataProvider, instance::Location, outline::{DrawSettin
 use winit::{event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent}, event_loop::EventLoop, window::Window};
 
 use vector_graphics::{
-    affine::Affine, canvas::Canvas, color::{Color, colors}, path::{Path, PathElement, fill_path, stroke_path}, stroke::{Join, Stroke}, vec::Vec2
+    affine::Affine, canvas::Canvas, color::{Color, colors}, path::{Path, fill_path, stroke_path}, stroke::{Join, Stroke}, vec::Vec2
 };
 
 mod app;
@@ -23,23 +23,23 @@ impl<'a> SkrifaOutlinePen<'a> {
 
 impl<'a> OutlinePen for SkrifaOutlinePen<'a> {
     fn move_to(&mut self, x: f32, y: f32) {
-        self.path.push(PathElement::MoveTo(Vec2::new(x, y)));
+        self.path.move_to(Vec2::new(x, y));
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        self.path.push(PathElement::LineTo(Vec2::new(x, y)));
+        self.path.line_to(Vec2::new(x, y));
     }
 
     fn quad_to(&mut self, cx0: f32, cy0: f32, x: f32, y: f32) {
-        self.path.push(PathElement::QuadTo(Vec2::new(cx0, cy0), Vec2::new(x, y)));
+        self.path.quad_to(Vec2::new(cx0, cy0), Vec2::new(x, y));
     }
 
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
-        self.path.push(PathElement::CurveTo(Vec2::new(cx0, cy0), Vec2::new(cx1, cy1), Vec2::new(x, y))); 
+        self.path.curve_to(Vec2::new(cx0, cy0), Vec2::new(cx1, cy1), Vec2::new(x, y)); 
     }
 
     fn close(&mut self) {
-        self.path.push(PathElement::Close); 
+        self.path.close(); 
     }
 }
 

@@ -102,10 +102,11 @@ struct Edge {
     direction: i32
 }
 
-pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], color: Color) {
-    assert!(points.len() > 2);
+pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[usize], color: Color) {
+    assert!(!runs.is_empty());
+
     // TODO: pixel coverage based anti-aliasing without vertical supersampling
-    let vertical_subsamples = 15; // should be accepted as argument
+    let vertical_subsamples = 15;
 
     fn make_edge(start: Vec2, end: Vec2, vertical_subsamples: f32) -> Edge {
         let (start_x, start_y) = (start.x, start.y * vertical_subsamples);
@@ -128,22 +129,25 @@ pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], co
         }
     }
 
-    let mut edges = Vec::<Edge>::new();
+    let mut edges = vec![];
+    let mut offset = 0;
+    for &length in runs {
+        assert!(length >= 3);
+        let end = offset + length;
 
-    for &(start, end) in runs {
-        let mut i = start;
-        while i < end {
+        let mut i = offset;
+        while i < end - 1 {
             edges.push(make_edge(points[i], points[i + 1], vertical_subsamples as f32));
             i += 1;
         }
 
-        edges.push(make_edge(points[end], points[start], vertical_subsamples as f32));
+        edges.push(make_edge(points[end - 1], points[offset], vertical_subsamples as f32));
+        offset = end;
     }
 
-    edges.sort_by(|a, b| match b.y_min.partial_cmp(&a.y_min) {
-        Some(Ordering::Equal) => b.x_hit.partial_cmp(&a.x_hit).unwrap(),
-        Some(other) => other,
-        None => panic!("{}, {}", a.y_min, b.y_min)
+    edges.sort_by(|a, b| match f32::total_cmp(&b.y_min, &a.y_min) {
+        Ordering::Equal => f32::total_cmp(&b.x_hit, &a.x_hit),
+        other => other,
     });
 
     let mut scanline = vec![0u8; canvas.width as usize];
@@ -163,6 +167,10 @@ pub fn polygon(canvas: &mut Canvas, points: &[Vec2], runs: &[(usize, usize)], co
 
             active_edges.retain(|edge| !(edge.y_max <= scan_y));
 
+            // FIXME?: a lot of implementations don't start an actual sort step, instead they 
+            // "insort" the new active edges, which might be more performant (would have to be
+            // profiled). Some analytical anti aliasing implementions don't require active edges to
+            // be sorted in x-direction entirely, so this might not be worth improving.
             while let Some(edge) = edges.last() && edge.y_min <= scan_y {
                 let mut edge = edges.pop().unwrap();
                 if edge.y_max > scan_y {
