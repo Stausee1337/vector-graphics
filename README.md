@@ -9,7 +9,7 @@ An exploration of concepts and algorithms in the field of CPU vector graphics.
     - [x] JBM
     - [x] Ghostscript Tiger
   - [x] Clean Up winit example
-  - [ ] Stroking example: kurbo's `tricky_strokes`, if possible, otherwise something simpler
+  - [x] Stroking example: kurbo's `tricky_strokes`, if possible, otherwise something simpler
   - [ ] Pico svg parser for ghostscript tiger example
   - [ ] Try using `png` instead of `image` crate for writing pngs
 - [ ] Implementation corrections
@@ -42,4 +42,6 @@ An exploration of concepts and algorithms in the field of CPU vector graphics.
   - [ ] Simple, skrifa based text rendering
   - [ ] Tests
 - [ ] Analytical Anti Aliasing
+- [ ] Correctness work on kurbo's `tricky_strokes` example
+  - [ ] Bounding boxes
 
